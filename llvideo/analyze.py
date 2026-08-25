@@ -382,7 +382,17 @@ def analyse(source: str, *, provider_name: str | None = None, model: str | None 
         if not pl.is_url and pl.probe and pl.probe.has_video:
             times = look or P.select_frame_times(duration, signals.get("scene_cuts"))
             target = sheet_path or str(work / f"sheet_{UploadCache.fingerprint(source)}.jpg")
-            tile = 768 if (pl.probe.is_screen_content and len(times) <= 4) else 360
+            # Screen recordings exist to be READ. A 360px tile renders terminal
+            # and editor text illegible, which defeats the point of the sheet —
+            # the agent cannot check the model's reading if it cannot read.
+            # So for screen content: bigger tiles, and fewer of them to pay for it.
+            if pl.probe.is_screen_content:
+                tile = 768
+                if len(times) > 6:
+                    step = len(times) / 6
+                    times = [times[int(i * step)] for i in range(6)]
+            else:
+                tile = 360
             try:
                 sheet = F.contact_sheet(upload_src, times, target, tile_width=tile)
             except LLVideoError:
