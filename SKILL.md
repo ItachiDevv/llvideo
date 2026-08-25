@@ -129,11 +129,17 @@ Zero tokens, no network. Returns scene cuts, black frames, freezes and silence.
 model's audio-event timestamps drift by about a second, so for anything frame-exact —
 FPS, dropped frames, A/V sync, a black flash — use `signals`, not the index.
 
-**Scene detection is a hint, never a complete list.** Two measured silent failures:
-it structurally never detects the first cut (frame 1 has no predecessor), and it can
-miss interior cuts entirely when two shots share a colour palette — at any threshold.
-The frame chooser therefore unions scene hits with a uniform floor. Never trust a bare
-cut list as complete.
+**Scene detection is a hint, never a complete list.** Measured on real footage:
+precision is perfect (55 seconds of handheld night driving, whip pans and headlight
+flare, peaked at 0.047 — nothing false-positives), but **recall is only about 50%**.
+It structurally cannot detect the first cut, and some real cuts score below any usable
+threshold. The frame chooser therefore unions scene hits with a **uniform floor every
+7 seconds**, and the floor does most of the coverage work. Never treat a bare cut list
+as complete.
+
+A related trap: a sparse contact sheet is **not** proof of a cut. A fast whip-pan looks
+exactly like an edit at 1 frame per second. Confirm suspected cuts with `signals` or a
+denser sample before believing your own eyes.
 
 ---
 

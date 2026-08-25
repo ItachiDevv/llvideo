@@ -369,7 +369,7 @@ def analyse(source: str, *, provider_name: str | None = None, model: str | None 
         # a model's own idea of the interesting moments is not a coverage guarantee.
         # A sheet with two frames is a poor basis for looking at a video yourself.
         if duration:
-            floor_interval = max(3.0, min(12.0, duration / 9))
+            floor_interval = max(3.0, min(7.0, duration / 9))
             floor = P.select_frame_times(duration, signals.get("scene_cuts"),
                                          floor_interval=floor_interval)
             merged = list(look)

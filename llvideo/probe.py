@@ -268,20 +268,32 @@ def detect_silence(src: str, noise: str = "-30dB", min_dur: float = 0.5) -> list
 
 
 def detect_scenes(src: str, threshold: float = 0.12) -> list[float]:
-    """Scene-change timestamps.
+    """Scene-change timestamps. A HINT, never a complete list.
 
-    WARNING — this is unreliable on its own and MUST NOT be used alone to pick
-    frames. Two silent failure modes, both measured on real footage:
+    Measured on real footage, and the numbers are worse than they look:
 
-      1. The FIRST cut is structurally undetectable. The `scene` value scores
-         frame N against frame N-1; frame 1 has no predecessor.
-      2. Some interior cuts never register at ANY threshold, down to 0.05,
-         when two shots share a colour palette and exposure.
+      Precision is perfect. Across 55.5s of continuous handheld night-driving
+      footage — whip pans, headlight flare, hard lighting changes — the highest
+      per-frame score reached 0.047. Nothing false-positives at >= 0.10.
 
-    Always combine with a uniform floor — use `select_frame_times()`, which does.
-    Default threshold 0.12 comes from a sweep on real footage: a genuine cut
-    scored between 0.05 and 0.15 and was already lost by 0.20. Synthetic
-    solid-colour test clips score far higher and will mislead you upward.
+      Recall is the problem. Of two genuine edits between real clips, one scored
+      in the 0.05-0.15 band and the other never crossed 0.05 at all, so it is
+      invisible at any sane threshold. Best-case recall was 50%.
+
+    Two structural blind spots:
+      1. The FIRST cut can never be detected. `scene` scores frame N against
+         frame N-1, and frame 1 has no predecessor.
+      2. Cuts between shots sharing a colour palette and exposure may score
+         below any usable threshold.
+
+    Default 0.12 sits in the only usable window: below 0.10 risks noise, above
+    0.15 loses the cuts that are detectable at all. That window is the whole
+    margin — do not widen it on the strength of synthetic tests, which use
+    solid-colour cuts that score far higher than real footage ever does.
+
+    Because recall is capped near 50%, the uniform floor in
+    `select_frame_times()` does more of the coverage work than this detector.
+    Never use this alone to choose frames.
     """
     log = _ffmpeg_filter_log(src, ["-vf", rf"select='gt(scene\,{threshold})',showinfo"])
     times = sorted({round(float(m.group(1)), 3)
@@ -290,12 +302,16 @@ def detect_scenes(src: str, threshold: float = 0.12) -> list[float]:
 
 
 def select_frame_times(duration: float, scene_times: list[float] | None = None,
-                       floor_interval: float = 12.0, max_frames: int = 64) -> list[float]:
+                       floor_interval: float = 7.0, max_frames: int = 64) -> list[float]:
     """Frame timestamps = uniform floor UNION scene hits.
 
-    The union is the whole point. Scene detection alone silently drops cuts
-    (see detect_scenes); a uniform floor alone misses fast cuts. Together they
-    degrade gracefully.
+    The union is the whole point, and the floor is the load-bearing half of it.
+    Scene detection's measured recall is about 50% on real footage, with some
+    real cuts undetectable at any threshold, so the floor is what actually
+    guarantees coverage — the detector only adds precision where it fires.
+
+    Default floor of 7s follows from that: a 12s floor was too sparse to carry
+    coverage a 50%-recall detector cannot provide.
     """
     if duration <= 0:
         return [0.0]

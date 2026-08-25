@@ -174,9 +174,13 @@ upload anything.
 
 ## Known limits
 
-- **Scene detection is a hint, not a list.** ffmpeg's `scene` filter structurally never
-  detects the first cut, and can miss interior cuts entirely between visually similar
-  shots at any threshold. Frame selection unions scene hits with a uniform floor.
+- **Scene detection is a hint, not a list.** Precision is perfect on real footage
+  (55s of handheld night driving peaked at 0.047 — no false positives), but **recall is
+  only ~50%**: it structurally cannot detect the first cut, and some real cuts score
+  below any usable threshold. Frame selection unions scene hits with a uniform floor
+  every 7 seconds, and the floor carries most of the coverage.
+- **A sparse contact sheet does not prove a cut.** A fast camera pan looks like an edit
+  at 1 fps. Verify suspected cuts with `signals` or denser sampling.
 - **Audio event timestamps drift about ±1s.** For frame-exact audio work use
   `signals` (silencedetect) or `transcribe`.
 - **Local transcription: `small` only.** Benchmarked on a 20-core CPU: `small` runs at

@@ -417,7 +417,9 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--out", default=None)
     p.add_argument("--tile", type=int, default=360, help="tile width px (768 for dense text)")
     p.add_argument("--cols", type=int, default=None)
-    p.add_argument("--interval", type=float, default=12.0, help="uniform floor seconds")
+    p.add_argument("--interval", type=float, default=7.0,
+                   help="uniform floor seconds (the floor carries coverage; scene "
+                        "detection only reaches ~50%% recall on real footage)")
     p.add_argument("--max-frames", type=int, default=16)
     p.add_argument("--no-scenes", action="store_true")
     p.set_defaults(func=cmd_sheet)
