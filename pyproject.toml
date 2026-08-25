@@ -1,0 +1,41 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "llvideo"
+version = "0.1.0"
+description = "Give any coding agent real video understanding — structured, timestamped, and cheap."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+authors = [{ name = "ItachiDevv" }]
+keywords = ["video", "analysis", "llm", "agent", "gemini", "openrouter", "ffmpeg",
+            "claude", "codex", "skill", "mcp"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Environment :: Console",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Topic :: Multimedia :: Video",
+]
+# No required dependencies. The core runs on the standard library plus ffmpeg.
+dependencies = []
+
+[project.optional-dependencies]
+# Contact sheets work without Pillow; it is only used to report exact dimensions.
+sheets = ["Pillow>=10"]
+# Local word-level transcription. CPU only, no GPU needed.
+transcribe = ["faster-whisper>=1.0"]
+all = ["Pillow>=10", "faster-whisper>=1.0"]
+
+[project.urls]
+Homepage = "https://github.com/ItachiDevv/llvideo"
+Issues = "https://github.com/ItachiDevv/llvideo/issues"
+
+[project.scripts]
+llvideo = "llvideo.cli:main"
+
+[tool.setuptools]
+packages = ["llvideo", "llvideo.providers"]
