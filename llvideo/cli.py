@@ -251,8 +251,13 @@ def cmd_sheet(args) -> int:
         times = [t for t in times if t >= 0]
     else:
         cuts = P.detect_scenes(args.source) if not args.no_scenes else []
+        # A fixed floor is too coarse for short clips: 7s over a 20s video gives
+        # three frames. Scale it down so a short video still gets real coverage.
+        interval = args.interval
+        if interval is None:
+            interval = max(1.0, min(7.0, pr.duration / 8))
         times = P.select_frame_times(pr.duration, cuts,
-                                     floor_interval=args.interval, max_frames=args.max_frames)
+                                     floor_interval=interval, max_frames=args.max_frames)
     out = args.out or str(scratch_dir() / f"sheet_{Path(args.source).stem}.jpg")
     s = F.contact_sheet(args.source, times, out, tile_width=args.tile, cols=args.cols)
     payload = {"path": s.path, "frame_times": s.frame_times, "cols": s.cols, "rows": s.rows,
@@ -417,9 +422,10 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--out", default=None)
     p.add_argument("--tile", type=int, default=360, help="tile width px (768 for dense text)")
     p.add_argument("--cols", type=int, default=None)
-    p.add_argument("--interval", type=float, default=7.0,
-                   help="uniform floor seconds (the floor carries coverage; scene "
-                        "detection only reaches ~50%% recall on real footage)")
+    p.add_argument("--interval", type=float, default=None,
+                   help="uniform floor in seconds (default: adaptive, at most 7s — the "
+                        "floor carries coverage because scene detection only reaches "
+                        "~50%% recall on real footage)")
     p.add_argument("--max-frames", type=int, default=16)
     p.add_argument("--no-scenes", action="store_true")
     p.set_defaults(func=cmd_sheet)
