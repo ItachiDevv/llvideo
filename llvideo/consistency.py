@@ -55,17 +55,83 @@ class Agreement:
                 "variants": self.variants}
 
 
+_STOP = {"the", "a", "an", "is", "are", "was", "were", "of", "in", "on", "at", "to",
+         "and", "or", "there", "this", "that", "it", "its", "with", "as", "by",
+         "for", "from", "be", "been", "being", "they", "their", "person"}
+
+
+def _stem(word: str) -> str:
+    """Crude suffix trim. Enough to stop 'stands' and 'stand' counting as a
+    disagreement, which is a wording difference, not a different observation."""
+    if word.isdigit() or len(word) <= 3:
+        return word
+    for suffix in ("ing", "ed", "es", "s"):
+        if word.endswith(suffix) and len(word) - len(suffix) >= 3:
+            return word[: -len(suffix)]
+    return word
+
+
+def _tokens(text: str) -> set[str]:
+    words = re.findall(r"[a-z0-9.:%-]+", (text or "").lower())
+    return {_stem(w) for w in words if w not in _STOP and len(w) > 1}
+
+
+def _similar(a: str, b: str) -> float:
+    """Overlap coefficient on content words: |A and B| / size of the smaller set.
+
+    Not Jaccard. Jaccard punishes a longer answer for adding detail, because the
+    union grows — two correct answers of different lengths score low even when
+    they agree completely. What matters here is whether one answer's claims are
+    present in the other, which is what the overlap coefficient measures.
+    """
+    ta, tb = _tokens(a), _tokens(b)
+    if not ta and not tb:
+        return 1.0
+    if not ta or not tb:
+        return 0.0
+    return len(ta & tb) / min(len(ta), len(tb))
+
+
+# Free-form answers never match character for character, so prose is compared by
+# content-word overlap. Short strings — a dashboard reading, a filename, an error
+# code — are compared exactly, because there a single changed digit IS the failure.
+PROSE_THRESHOLD = 0.6
+SHORT_ANSWER_CHARS = 40
+
+
 def agree(answers: list[str]) -> Agreement:
-    """Majority vote over normalised answers."""
+    """Majority vote.
+
+    Short answers must match exactly. Longer prose answers are clustered by
+    content-word overlap, so "one person, dancing under a tree" and "a single
+    person dances beneath a tree at night" count as agreement — which they are.
+    Comparing prose character by character would flag every run as unreliable
+    and make the whole check useless.
+    """
     answers = [a for a in answers if a is not None]
     if not answers:
         return Agreement("", 0, 0)
-    norm = [_normalise(a) for a in answers]
-    counts = Counter(norm)
-    top_norm, votes = counts.most_common(1)[0]
-    original = next(a for a, n in zip(answers, norm) if n == top_norm)
-    variants = sorted({a for a, n in zip(answers, norm) if n != top_norm})
-    return Agreement(original, votes, len(answers), variants)
+
+    longest = max(len(a) for a in answers)
+    if longest <= SHORT_ANSWER_CHARS:
+        norm = [_normalise(a) for a in answers]
+        counts = Counter(norm)
+        top_norm, votes = counts.most_common(1)[0]
+        original = next(a for a, n in zip(answers, norm) if n == top_norm)
+        variants = sorted({a for a, n in zip(answers, norm) if n != top_norm})
+        return Agreement(original, votes, len(answers), variants)
+
+    # Prose: pick the answer that the most others agree with.
+    best_idx, best_votes = 0, 0
+    for i, cand in enumerate(answers):
+        votes = sum(1 for j, other in enumerate(answers)
+                    if i == j or _similar(cand, other) >= PROSE_THRESHOLD)
+        if votes > best_votes:
+            best_idx, best_votes = i, votes
+    winner = answers[best_idx]
+    variants = [a for i, a in enumerate(answers)
+                if i != best_idx and _similar(winner, a) < PROSE_THRESHOLD]
+    return Agreement(winner, best_votes, len(answers), variants)
 
 
 def check_text_claims(runs: list[dict]) -> list[dict]:

@@ -185,6 +185,30 @@ class TestConsistency(unittest.TestCase):
         self.assertIn("330 mi", summary["stable"])
         self.assertEqual(len(summary["unstable"]), 3)
 
+    def test_prose_paraphrase_is_agreement_not_failure(self):
+        """The false positive that shipped once: two answers saying the same
+        thing in different words must not read as unreliable."""
+        a = consistency.agree([
+            "There is only one person visible. They stand under a tree at night, "
+            "swaying and gesturing with their hands.",
+            "Only one person is visible in the video. The person stands beneath a "
+            "tree at night, gesturing with their hands and swaying to music.",
+        ])
+        self.assertNotEqual(a.verdict, "unreliable")
+        self.assertEqual(a.variants, [])
+
+    def test_prose_that_genuinely_differs_is_still_caught(self):
+        a = consistency.agree([
+            "There is one person visible, standing under a tree at night.",
+            "Three people are visible, sitting inside a car during the day.",
+        ])
+        self.assertEqual(a.verdict, "unreliable")
+
+    def test_short_readings_still_need_exact_match(self):
+        """A single changed digit IS the failure for a dashboard reading."""
+        a = consistency.agree(["55 F", "65 F"])
+        self.assertEqual(a.verdict, "unreliable")
+
     def test_empty_input_is_safe(self):
         self.assertEqual(consistency.check_text_claims([]), [])
         self.assertEqual(consistency.agree([]).trials, 0)
