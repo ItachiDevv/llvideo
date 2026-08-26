@@ -234,3 +234,123 @@ def index_frame_times(index: dict, duration: float, limit: int = 16) -> list[flo
         if all(abs(t - u) > 0.75 for u in seen):
             seen.append(t)
     return sorted(seen)[:limit]
+
+
+# ---------------------------------------------------------------------------
+# Craft analysis — how a video is SHOT and CUT, not what is said in it.
+#
+# This needs dense sampling. A hard cut occupies one frame; at 1 fps you see
+# the shots either side and never the transition itself. So the craft path
+# raises fps inside short windows rather than sampling the whole timeline.
+# ---------------------------------------------------------------------------
+
+TRANSITION_KINDS = [
+    "hard_cut", "crossfade", "fade_to_black", "fade_from_black", "fade_to_white",
+    "wipe", "slide", "whip_pan", "match_cut", "jump_cut", "morph", "zoom_transition",
+    "glitch", "light_leak", "none",
+]
+
+CAMERA_MOVES = [
+    "static", "pan_left", "pan_right", "tilt_up", "tilt_down", "dolly_in", "dolly_out",
+    "truck", "crane", "handheld", "steadicam", "zoom_in", "zoom_out", "whip_pan",
+    "orbit", "drone", "rack_focus",
+]
+
+SHOT_SIZES = [
+    "extreme_wide", "wide", "medium_wide", "medium", "medium_close", "close_up",
+    "extreme_close_up", "over_the_shoulder", "two_shot", "insert", "pov", "aerial",
+]
+
+CRAFT_SCHEMA = {
+    "type": "OBJECT",
+    "properties": {
+        "overall": {
+            "type": "OBJECT",
+            "properties": {
+                "style": {"type": "STRING", "description": "The editing and visual style in one sentence."},
+                "pacing": {"type": "STRING", "enum": ["very_slow", "slow", "moderate", "fast", "very_fast", "varied"]},
+                "pacing_note": {"type": "STRING", "description": "How the rhythm changes across the piece."},
+                "colour": {"type": "STRING", "description": "Palette and grade — warm/cool, contrast, saturation, any obvious LUT."},
+                "lighting": {"type": "STRING", "description": "Key quality, direction, motivation, practicals."},
+            },
+            "required": ["style", "pacing", "pacing_note", "colour", "lighting"],
+        },
+        "shots": {
+            "type": "ARRAY",
+            "description": "Every distinct SHOT — a continuous run of camera between two transitions. A camera move within one take is NOT a new shot.",
+            "items": {
+                "type": "OBJECT",
+                "properties": {
+                    "start": {"type": "STRING"},
+                    "end": {"type": "STRING"},
+                    "shot_size": {"type": "STRING", "enum": SHOT_SIZES},
+                    "camera_move": {"type": "STRING", "enum": CAMERA_MOVES},
+                    "subject": {"type": "STRING", "description": "What the shot is of."},
+                    "composition": {"type": "STRING", "description": "Framing, balance, leading lines, depth, rule of thirds."},
+                    "notable": {"type": "STRING", "description": "Anything a colourist or editor would flag. Empty if nothing."},
+                },
+                "required": ["start", "end", "shot_size", "camera_move", "subject", "composition"],
+            },
+        },
+        "transitions": {
+            "type": "ARRAY",
+            "description": "Every transition BETWEEN shots. Include the type and how long it takes.",
+            "items": {
+                "type": "OBJECT",
+                "properties": {
+                    "at": {"type": "STRING", "description": "MM:SS where the transition begins."},
+                    "kind": {"type": "STRING", "enum": TRANSITION_KINDS},
+                    "duration_seconds": {"type": "NUMBER", "description": "0 for a hard cut. Otherwise how long the blend lasts."},
+                    "from_shot": {"type": "STRING", "description": "What is on screen going in."},
+                    "to_shot": {"type": "STRING", "description": "What is on screen coming out."},
+                    "motivation": {"type": "STRING", "description": "Why the editor cut here — on action, on beat, on dialogue, on a look. Say 'unclear' honestly."},
+                    "confidence": {"type": "STRING", "enum": ["high", "medium", "low"]},
+                },
+                "required": ["at", "kind", "duration_seconds", "from_shot", "to_shot", "motivation", "confidence"],
+            },
+        },
+        "rhythm": {
+            "type": "ARRAY",
+            "description": "Shot lengths in order, seconds. Lets the caller compute pacing statistics.",
+            "items": {"type": "NUMBER"},
+        },
+        "uncertainties": {
+            "type": "ARRAY",
+            "description": "Transitions you could not classify, or moments where camera movement and a cut are hard to tell apart. Be honest.",
+            "items": {"type": "STRING"},
+        },
+    },
+    "required": ["overall", "shots", "transitions", "rhythm", "uncertainties"],
+}
+
+
+CRAFT_PROMPT = """You are a film editor breaking down how this video is SHOT and CUT.
+Ignore what is being said. The subject is the craft.
+
+Report:
+- Every SHOT: size, camera movement, subject, composition.
+- Every TRANSITION between shots: the type, how long it lasts, and why the cut lands there.
+- Pacing, colour grade, and lighting.
+
+Rules that decide whether this is any good:
+
+1. A CAMERA MOVE IS NOT A CUT. A whip pan, a fast tilt, or a rack focus can look
+   like an edit at low frame rates, but the footage is continuous. If frames flow
+   into each other with motion blur and no content jump, it is one shot with
+   movement — say so, and classify the move.
+
+2. A HARD CUT is instantaneous — one frame is shot A, the next is shot B, with no
+   blended frames between them. If you can see frames containing BOTH images mixed
+   together, it is a crossfade, not a cut, and you must give its duration.
+
+3. Distinguish the blend types. A crossfade mixes two images directly. A fade to
+   black passes through black between them. A wipe moves a hard edge across the
+   frame. A slide pushes one image off as the other comes on.
+
+4. Give transition timing from what you actually see, not from a guess. If you
+   cannot tell a 0.3s dissolve from a hard cut at this sampling rate, set
+   confidence low and say so in `uncertainties`.
+
+5. Never invent a transition to fill a gap between shots you noticed. Missing one
+   is better than inventing one.
+"""

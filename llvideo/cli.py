@@ -243,6 +243,12 @@ def cmd_clip(args) -> int:
     return 0
 
 
+def cmd_craft(args) -> int:
+    """How the video is shot and cut. Implementation in cli_craft.py."""
+    from . import cli_craft
+    return cli_craft.run(args, _out, _fmt_ts)
+
+
 def cmd_sheet(args) -> int:
     """T4 — build a contact sheet for the agent to read with its own eyes."""
     pr = P.probe(args.source)
@@ -416,6 +422,19 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--end", required=True, help="MM:SS or seconds")
     p.add_argument("-q", "--question", default=None)
     p.set_defaults(func=cmd_clip)
+
+    p = modelargs(common(sub.add_parser("craft",
+        help="how it is shot and cut - transitions, camera moves, pacing, grade")))
+    p.add_argument("-q", "--question", default=None,
+                   help="an extra question about the craft")
+    p.add_argument("--zoom-fps", type=float, default=8.0,
+                   help="fps inside each transition window (default 8; a cut needs "
+                        "dense sampling to tell from a fast camera move)")
+    p.add_argument("--max-windows", type=int, default=8,
+                   help="how many transitions to inspect closely")
+    p.add_argument("--no-zoom", action="store_true",
+                   help="skip the high-fps pass - cheaper, much less accurate")
+    p.set_defaults(func=cmd_craft)
 
     p = common(sub.add_parser("sheet", help="contact sheet for the agent to read itself"))
     p.add_argument("--at", default=None, help="comma-separated timestamps")

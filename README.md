@@ -15,6 +15,7 @@ Works with Claude Code, Codex, or any agent that can run a shell command.
 ```bash
 llvideo index recording.mp4
 llvideo ask clip.mp4 -q "what error message appears?"  --verify 3
+llvideo craft edit.mp4                       # transitions, camera moves, pacing
 llvideo ask "https://youtube.com/watch?v=..." -q "when do they announce the price?"
 ```
 
@@ -83,6 +84,20 @@ measured, not estimated — `llvideo signals` is millisecond-exact and costs not
 
 ---
 
+## Analysing the edit, not the content
+
+`craft` answers "how is this cut" — transitions with exact durations, shot sizes,
+camera moves, pacing statistics, colour and lighting.
+
+It cannot work by sampling the timeline at 1 fps, because a hard cut occupies one
+frame. So it finds candidate transitions locally for free, then re-examines each one at
+8 fps, and **measures brightness with ffmpeg** to separate a fade-through-black from a
+crossfade. Verified against known transitions: 4/4 types correct, durations within 0.2s.
+
+It also refuses the classic trap. On a continuous handheld take containing a whip pan it
+reported one shot and zero transitions, instead of mistaking fast camera movement for an
+edit — which is exactly what a sparse frame sample does.
+
 ## The on-screen text problem
 
 Vision models read blurred text confidently and get it wrong. Same motion-blurred car
@@ -124,6 +139,7 @@ code on screen, dashboard numbers. Each run costs about the same as the first.
 | `transcribe` | free | local word-level transcript, CPU only |
 | `index` | ~$0.005/min | full structured timeline + contact sheet |
 | `ask -q` | ~$0.005/min | one question, answered with citations |
+| `craft` | ~$0.02/min | transitions, camera moves, shots, pacing, grade |
 | `clip --start --end` | ~$0.003 | frame-exact deep dive on a window |
 | `providers` | free | which backends are usable |
 | `clean` | free | delete scratch files and uploads |

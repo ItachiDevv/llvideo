@@ -398,5 +398,83 @@ class TestCLI(unittest.TestCase):
         self.assertIn("gemini", json.loads(cp.stdout))
 
 
+class TestCraftDetection(unittest.TestCase):
+    """The shape of the score curve is what separates a cut from a blend."""
+
+    def _scores(self, pairs):
+        return pairs
+
+    def test_hard_cut_is_tall_and_narrow(self):
+        from llvideo import craft
+        scores = [(i * 0.033, 0.002) for i in range(60)]
+        scores[30] = (30 * 0.033, 0.72)
+        c = craft.find_candidates(scores)
+        self.assertEqual(len(c), 1)
+        self.assertEqual(c[0].kind_hint, "cut-like")
+
+    def test_soft_blend_is_low_and_wide_and_still_found(self):
+        """A 1s crossfade peaks near 0.025 — far below any spike threshold.
+        Missing these is why detect_scenes alone cannot classify transitions."""
+        from llvideo import craft
+        scores = [(i * 0.033, 0.002) for i in range(90)]
+        for i in range(30, 60):
+            scores[i] = (i * 0.033, 0.02)
+        c = craft.find_candidates(scores)
+        self.assertTrue(c, "a soft blend must still be detected")
+        self.assertEqual(c[0].kind_hint, "blend-like")
+        self.assertGreater(c[0].width, 0.5)
+
+    def test_first_frame_artifact_ignored(self):
+        from llvideo import craft
+        scores = [(0.0, 0.9)] + [(i * 0.033, 0.001) for i in range(1, 60)]
+        self.assertEqual(craft.find_candidates(scores), [])
+
+    def test_no_candidates_on_a_flat_curve(self):
+        from llvideo import craft
+        self.assertEqual(craft.find_candidates([(i * 0.033, 0.001) for i in range(200)]), [])
+
+    def test_prominence_keeps_soft_blends_over_noise(self):
+        """Ranking on raw peak would discard every dissolve. Wide blends must survive."""
+        from llvideo import craft
+        blend = craft.Candidate(time=8.0, peak=0.025, width=1.0, kind_hint="blend-like")
+        noise = craft.Candidate(time=14.0, peak=0.040, width=0.0, kind_hint="blend-like")
+        wins = craft.windows_for([blend, noise], duration=24.0, limit=1)
+        self.assertEqual(len(wins), 1)
+        self.assertLess(wins[0][0], 9.0, "the 1s blend should outrank a narrow noise spike")
+
+    def test_windows_merge_when_they_overlap(self):
+        from llvideo import craft
+        a = craft.Candidate(time=5.0, peak=0.5, width=0.0, kind_hint="cut-like")
+        b = craft.Candidate(time=5.5, peak=0.5, width=0.0, kind_hint="cut-like")
+        self.assertEqual(len(craft.windows_for([a, b], duration=20.0)), 1)
+
+    def test_pacing_stats(self):
+        from llvideo import craft
+        c = [craft.Candidate(t, 0.5, 0.0, "cut-like") for t in (4.0, 8.0, 13.0, 18.0)]
+        st = craft.shot_stats(c, 24.0)
+        self.assertEqual(st["shots"], 5)
+        self.assertEqual(st["cuts_per_minute"], 10.0)
+
+    def test_empty_input_safe(self):
+        from llvideo import craft
+        self.assertEqual(craft.find_candidates([]), [])
+        self.assertEqual(craft.shot_stats([], 0.0)["shots"], 0)
+
+
+class TestCraftSchema(unittest.TestCase):
+    def test_transition_needs_type_duration_and_confidence(self):
+        req = schema.CRAFT_SCHEMA["properties"]["transitions"]["items"]["required"]
+        for field_name in ("kind", "duration_seconds", "confidence"):
+            self.assertIn(field_name, req)
+
+    def test_whip_pan_is_a_camera_move_not_only_a_transition(self):
+        """The trap this mode exists to avoid: fast camera movement read as an edit."""
+        self.assertIn("whip_pan", schema.CAMERA_MOVES)
+
+    def test_blend_kinds_are_distinguishable(self):
+        for k in ("hard_cut", "crossfade", "fade_to_black", "wipe"):
+            self.assertIn(k, schema.TRANSITION_KINDS)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

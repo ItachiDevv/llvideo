@@ -86,6 +86,54 @@ Clipping is frame-exact and costs a few hundred tokens. Use it freely.
 
 ---
 
+## Transitions, camera and pacing — `craft`
+
+For "how is this cut", "what transitions are used", "analyse the edit", "what is the
+camera doing", "why does this feel fast" — use `craft`, not `index`.
+
+```bash
+llvideo craft VIDEO
+llvideo craft VIDEO -q "does the cut at 00:14 land on the beat?"
+```
+
+`index` samples the whole video at 1 fps, which is fine for *what happens* and useless
+for *how it is cut*: a hard cut occupies a single frame, so at 1 fps you see the shots
+either side and never the transition. `craft` works differently:
+
+1. A free local pass scores every frame and finds candidate transitions. This catches
+   soft blends a normal detector cannot — a 1-second crossfade peaks around **0.025**,
+   where scene detection triggers at 0.12.
+2. Each candidate is then re-examined **at 8 fps in a tight window**, so the model sees
+   the transition happen frame by frame.
+3. Brightness through each window is **measured with ffmpeg**, which is what separates a
+   fade-through-black from a crossfade. Without it the model calls a fade-to-black a
+   crossfade; with it, correct.
+
+Returns shot list (size, camera move, composition), transition list (type, exact
+duration, why the cut lands there), pacing statistics, colour and lighting.
+
+Verified against a video with known transitions — **4/4 types correct**, durations
+within 0.2s:
+
+| built | detected |
+|---|---|
+| hard cut, instant | `hard_cut`, instant |
+| crossfade, 1.0s | `crossfade`, 1.0s |
+| fade-to-black, 0.6s | `fade_to_black`, 0.5s |
+| wipe-left, 0.8s | `wipe`, 0.63s |
+
+And on a continuous handheld take containing a whip pan it correctly reported **one
+shot and zero transitions** rather than inventing a cut.
+
+**A camera move is not a cut.** A whip pan, fast tilt or rack focus looks exactly like
+an edit at low frame rates. `craft` is built to tell them apart; `index` is not. If a
+question is about editing, use `craft`.
+
+Flags: `--zoom-fps 12` for very fast cutting · `--max-windows 12` for busier edits ·
+`--no-zoom` to skip the close pass (cheaper, much less accurate).
+
+---
+
 ## On-screen text is the failure mode. Take it seriously.
 
 A model will read blurred text confidently and get it wrong. Measured on real
@@ -240,6 +288,7 @@ file. Use llvideo on the **rendered output**; use hyperframes on the **live comp
 | `transcribe` | free | local word-level transcript |
 | `index` | ~$0.005/min | full structured timeline + contact sheet |
 | `ask -q` | ~$0.005/min | one question, answered with citations |
+| `craft` | ~$0.02/min | transitions, camera moves, shots, pacing, grade |
 | `clip --start --end` | ~$0.003 | frame-exact deep dive on a window |
 | `providers` | free | which backends are usable |
 | `clean` | free | delete scratch files and uploads |
