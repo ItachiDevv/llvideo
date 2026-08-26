@@ -1,11 +1,20 @@
 """The `craft` command — how a video is shot and cut.
 
-Kept separate from cli.py because it has its own two-pass strategy: a free local
-pass to find candidate transitions, then a high-fps pass on each one. Sampling
-the whole timeline at 1 fps would show the shots either side of every cut and
-never the cut itself, which is the thing being asked about.
+Two passes, and the split is the whole design. A free local pass finds candidate
+transitions from per-frame scene scores; then each candidate is re-examined at
+high fps so the transition is actually visible. Sampling the whole timeline at
+1 fps shows the shots either side of every cut and never the cut itself, which
+is the thing being asked about.
+
+There is exactly one implementation of that, `analyse_craft`. The audit path
+needs the same answers, and an earlier version had the audit run a cheaper
+single-pass call — which reported a wipe and a fade-to-black as `hard_cut` and
+invented spec mismatches that were not real. One path, no shortcuts.
 """
 from __future__ import annotations
+
+from concurrent.futures import ThreadPoolExecutor
+from dataclasses import dataclass, field
 
 from . import craft as C
 from . import frames as F
@@ -14,6 +23,11 @@ from .analyze import UploadCache, is_url, scratch_dir
 from .errors import LLVideoError
 from .providers import pick_provider
 from .schema import CRAFT_PROMPT, CRAFT_SCHEMA
+
+# Windows are independent API calls against an already-uploaded file, so running
+# them concurrently is pure wall-clock saving. Measured sequential: 4 windows in
+# 61s. Capped low to stay friendly to provider rate limits.
+MAX_PARALLEL = 6
 
 
 def _resolve_upload(prov, source: str, url: bool):
@@ -32,22 +46,26 @@ def _resolve_upload(prov, source: str, url: bool):
     return info["uri"]
 
 
+@dataclass
+class CraftResult:
+    data: dict
+    stats: dict
+    candidates: list
+    windows: list = field(default_factory=list)
+    provider: str = ""
+    input_tokens: int = 0
+    output_tokens: int = 0
+    cost_usd: float = 0.0
+
+
 def analyse_craft(source: str, *, provider=None, model=None, zoom_fps: float = 8.0,
                   max_windows: int = 8, no_zoom: bool = False,
-                  extra_prompt: str = "") -> tuple[dict, dict, list]:
-    """Shared two-pass craft analysis.
-
-    Anything that needs transition classification MUST come through here, not
-    through a single whole-video pass. A one-pass call at 1 fps reports a wipe
-    and a fade-to-black as `hard_cut` — measured. For an auditor comparing a
-    render against a spec, that is worse than useless: it invents mismatches.
-
-    Returns (craft_data, pacing_stats, candidates).
-    """
+                  extra_prompt: str = "", fps: float | None = None) -> CraftResult:
     url = is_url(source)
     pr = None if url else P.probe(source)
     duration = pr.duration if pr else 0.0
 
+    # Pass 1 — free, local, zero tokens.
     cands, stats, hint = [], {}, ""
     if pr and pr.has_video:
         cands = C.find_candidates(C.frame_scores(source))
@@ -59,29 +77,55 @@ def analyse_craft(source: str, *, provider=None, model=None, zoom_fps: float = 8
 
     prompt = CRAFT_PROMPT + (("\n\n" + hint) if hint else "") + extra_prompt
     overall = prov.analyse(source, prompt, CRAFT_SCHEMA, is_url=url,
-                           model=model, file_uri=uri)
-    data = dict(overall.data)
+                           model=model, file_uri=uri, fps=fps)
+    res = CraftResult(data=dict(overall.data), stats=stats, candidates=cands,
+                      provider=prov.name,
+                      input_tokens=overall.usage.input_tokens,
+                      output_tokens=overall.usage.output_tokens,
+                      cost_usd=overall.usage.cost_usd or 0.0)
 
+    # Pass 2 — high fps, only inside the candidate windows, run concurrently.
     if cands and prov.name == "gemini" and not no_zoom:
-        detailed = []
-        for (a, b) in C.windows_for(cands, duration, limit=max_windows):
+        res.windows = C.windows_for(cands, duration, limit=max_windows)
+
+        def one(window):
+            a, b = window
             wp = (CRAFT_PROMPT
-                  + f"\n\nYou are seeing ONLY {a:.2f}s to {b:.2f}s, sampled at {zoom_fps} "
-                    f"frames per second so the transition is visible frame by frame.\n\n"
-                    "Report the transition here and its exact duration. Frames flowing "
-                    "into each other with motion blur and no content jump means CAMERA "
-                    "MOVEMENT, not an edit. Frames containing two images mixed together "
-                    "mean a blend, and you must give its duration.")
+                  + f"\n\nYou are seeing ONLY {a:.2f}s to {b:.2f}s of this video, sampled "
+                    f"at {zoom_fps} frames per second so the transition itself is visible "
+                    f"frame by frame.\n\n"
+                    "Report the transition in this window and its exact duration. If the "
+                    "frames flow into each other with motion blur and no content jump, "
+                    "this is CAMERA MOVEMENT, not an edit — classify the move and say "
+                    "there is no cut here. If you see frames containing two images mixed "
+                    "together, it is a blend, and you must say how long it lasts.")
+            # Measure brightness locally first. A model reading sparse frames
+            # cannot reliably tell a fade-through-black from a crossfade; a luma
+            # dip to near zero settles it objectively.
             if not url:
                 wp += C.describe_luma(C.luma_profile(source, a, b))
             r = prov.analyse(source, wp, CRAFT_SCHEMA, start=a, end=b, fps=zoom_fps,
                              model=model, file_uri=uri)
+            found = []
             for t in (r.data.get("transitions") or []):
                 t["_window"] = f"{a:.2f}-{b:.2f}"
-                detailed.append(t)
+                found.append(t)
+            return found, r.usage
+
+        detailed = []
+        if res.windows:
+            workers = min(MAX_PARALLEL, len(res.windows))
+            with ThreadPoolExecutor(max_workers=workers) as pool:
+                # pool.map preserves input order, so transitions stay on the
+                # timeline in the order they happen regardless of who finishes first.
+                for found, usage in pool.map(one, res.windows):
+                    detailed.extend(found)
+                    res.input_tokens += usage.input_tokens
+                    res.output_tokens += usage.output_tokens
+                    res.cost_usd += usage.cost_usd or 0.0
         if detailed:
-            data["transitions"] = detailed
-    return data, stats, cands
+            res.data["transitions"] = detailed
+    return res
 
 
 def run(args, out, fmt_ts) -> int:
@@ -89,63 +133,13 @@ def run(args, out, fmt_ts) -> int:
     pr = None if url else P.probe(args.source)
     duration = pr.duration if pr else 0.0
 
-    # Pass 1 — free, local, zero tokens.
-    cands, stats, hint = [], {}, ""
-    if pr and pr.has_video:
-        cands = C.find_candidates(C.frame_scores(args.source))
-        stats = C.shot_stats(cands, duration)
-        hint = C.describe_candidates(cands)
-
-    prov = pick_provider(args.provider, needs_upload=not url, needs_clipping=True)
-    file_uri = _resolve_upload(prov, args.source, url)
-
-    prompt = CRAFT_PROMPT + (("\n\n" + hint) if hint else "")
-    if args.question:
-        prompt += "\n\nThe user also asks: " + args.question
-
-    tin = tout = 0
-    cost = 0.0
-
-    overall = prov.analyse(args.source, prompt, CRAFT_SCHEMA, is_url=url,
-                           model=args.model, file_uri=file_uri,
-                           fps=(args.fps if args.fps else None))
-    tin += overall.usage.input_tokens
-    tout += overall.usage.output_tokens
-    cost += overall.usage.cost_usd or 0.0
-    data = dict(overall.data)
-
-    # Pass 2 — high fps, only inside the candidate windows.
-    windows: list[tuple[float, float]] = []
-    if cands and prov.name == "gemini" and not args.no_zoom:
-        windows = C.windows_for(cands, duration, limit=args.max_windows)
-        detailed = []
-        for (a, b) in windows:
-            wprompt = (
-                CRAFT_PROMPT
-                + f"\n\nYou are seeing ONLY {a:.2f}s to {b:.2f}s of this video, sampled at "
-                  f"{args.zoom_fps} frames per second so the transition itself is visible "
-                  f"frame by frame.\n\n"
-                  "Report the transition in this window and its exact duration. If the "
-                  "frames flow into each other with motion blur and no content jump, this "
-                  "is CAMERA MOVEMENT, not an edit — classify the move and say there is no "
-                  "cut here. If you see frames containing two images mixed together, it is "
-                  "a blend, and you must say how long it lasts."
-            )
-            # Measure brightness locally first. A model reading sparse frames
-            # cannot reliably tell a fade-through-black from a crossfade; a luma
-            # dip to near zero settles it objectively.
-            if not url:
-                wprompt += C.describe_luma(C.luma_profile(args.source, a, b))
-            r = prov.analyse(args.source, wprompt, CRAFT_SCHEMA, start=a, end=b,
-                             fps=args.zoom_fps, model=args.model, file_uri=file_uri)
-            tin += r.usage.input_tokens
-            tout += r.usage.output_tokens
-            cost += r.usage.cost_usd or 0.0
-            for t in (r.data.get("transitions") or []):
-                t["_window"] = f"{a:.2f}-{b:.2f}"
-                detailed.append(t)
-        if detailed:
-            data["transitions"] = detailed
+    extra = ("\n\nThe user also asks: " + args.question) if args.question else ""
+    res = analyse_craft(args.source, provider=pick_provider(
+                            args.provider, needs_upload=not url, needs_clipping=True),
+                        model=args.model, zoom_fps=args.zoom_fps,
+                        max_windows=args.max_windows, no_zoom=args.no_zoom,
+                        extra_prompt=extra, fps=(args.fps if args.fps else None))
+    data, stats, cands = res.data, res.stats, res.candidates
 
     # Frames either side of every candidate, so the classification can be checked.
     sheet = None
@@ -168,17 +162,18 @@ def run(args, out, fmt_ts) -> int:
         "measured": {
             "candidates": [c.to_dict() for c in cands],
             "pacing": stats,
-            "zoom_windows": [{"start": round(a, 2), "end": round(b, 2)} for a, b in windows],
+            "zoom_windows": [{"start": round(a, 2), "end": round(b, 2)}
+                             for a, b in res.windows],
         },
-        "usage": {"input_tokens": tin, "output_tokens": tout,
-                  "cost_usd": round(cost, 4) if cost else None},
+        "usage": {"input_tokens": res.input_tokens, "output_tokens": res.output_tokens,
+                  "cost_usd": round(res.cost_usd, 4) if res.cost_usd else None},
         "contact_sheet": ({"path": sheet.path, "frame_times": sheet.frame_times}
                           if sheet else None),
     }
 
     def human(_):
         u = payload["usage"]
-        line = f"[{prov.name}]  {u['input_tokens']:,} in / {u['output_tokens']:,} out"
+        line = f"[{res.provider}]  {u['input_tokens']:,} in / {u['output_tokens']:,} out"
         if u["cost_usd"]:
             line += f"  ${u['cost_usd']:.4f}"
         print(line)
@@ -188,17 +183,14 @@ def run(args, out, fmt_ts) -> int:
         print(f"  pacing    {o.get('pacing')} - {o.get('pacing_note', '')}")
         print(f"  colour    {o.get('colour', '')}")
         print(f"  lighting  {o.get('lighting', '')}")
-        # These are raw local CANDIDATES, not confirmed shots. Saying "9 shots"
-        # next to an analysis that found one continuous take reads as a
-        # contradiction, when it is really the detector casting a wide net.
         n_shots = len(payload["shots"] or [])
+        n_trans = len(payload["transitions"] or [])
         if stats:
             print(f"  detector  {len(cands)} candidate boundaries "
                   f"(before classification; many are camera movement, not cuts)")
         if n_shots:
             print(f"  confirmed {n_shots} shot{'s' if n_shots != 1 else ''}, "
-                  f"{len(payload['transitions'] or [])} transition"
-                  f"{'s' if len(payload['transitions'] or []) != 1 else ''}")
+                  f"{n_trans} transition{'s' if n_trans != 1 else ''}")
         print()
         print("SHOTS")
         for sh in (payload["shots"] or []):

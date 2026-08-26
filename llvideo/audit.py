@@ -121,7 +121,8 @@ def check_dead_air(pr: P.Probe) -> list[Finding]:
     out: list[Finding] = []
     if not pr.has_video:
         return out
-    for ev in P.detect_black(pr.path, min_dur=0.4):
+    events = P.detect_video_events(pr.path)
+    for ev in events["black"]:
         if ev["start"] < 0.3 or ev["end"] > pr.duration - 0.3:
             continue  # edges are handled separately
         out.append(Finding(
@@ -129,7 +130,7 @@ def check_dead_air(pr: P.Probe) -> list[Finding]:
             f"{ev['duration']:.2f}s of black at {_fmt(ev['start'])}. "
             f"Intentional only if the edit calls for it.",
             at=ev["start"], measured=ev))
-    for ev in P.detect_freeze(pr.path, min_dur=2.0):
+    for ev in events["freeze"]:
         dur = ev.get("duration")
         if dur and dur > 2.0 and dur < pr.duration * 0.9:
             out.append(Finding(
@@ -146,17 +147,11 @@ def check_audio(pr: P.Probe) -> list[Finding]:
         out.append(Finding("note", "audio", "No audio track.", source="measured"))
         return out
 
-    log = P._ffmpeg_filter_log(pr.path, ["-af", "ebur128=peak=true", "-vn"])
-    tail = log[-4000:]
-
-    def grab(label: str) -> float | None:
-        m = re.search(rf"{label}:\s*(-?\d+\.?\d*)", tail)
-        return float(m.group(1)) if m else None
-
-    lufs = grab("I")
-    peak = grab("Peak")
-    lra = grab("LRA")
-    measured = {"integrated_lufs": lufs, "true_peak_dbfs": peak, "loudness_range": lra}
+    ev = P.detect_audio_events(pr.path, noise="-45dB", min_dur=1.5)
+    lufs = ev["integrated_lufs"]
+    peak = ev["true_peak_dbfs"]
+    measured = {"integrated_lufs": lufs, "true_peak_dbfs": peak,
+                "loudness_range": ev["loudness_range"]}
 
     if lufs is not None:
         if lufs < -30:
@@ -183,7 +178,7 @@ def check_audio(pr: P.Probe) -> list[Finding]:
             f"after lossy encoding.",
             measured=measured))
 
-    silences = P.detect_silence(pr.path, noise="-45dB", min_dur=1.5)
+    silences = ev["silence"]
     total_silent = sum((s.get("duration") or 0) for s in silences)
     if pr.duration and total_silent > pr.duration * 0.6:
         out.append(Finding(

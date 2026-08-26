@@ -39,9 +39,9 @@ def run(args, out, fmt_ts) -> int:
         # classifies a wipe and a fade-to-black as `hard_cut`, which would
         # make the auditor report mismatches that are not real.
         from .cli_craft import analyse_craft
-        craft_data, _stats, _cands = analyse_craft(
-            args.source, model=args.model,
-            zoom_fps=args.zoom_fps, max_windows=args.max_windows)
+        _res = analyse_craft(args.source, model=args.model,
+                             zoom_fps=args.zoom_fps, max_windows=args.max_windows)
+        craft_data = _res.data
         for w in (craft_data.get("uncertainties") or []):
             findings.append(A.Finding("note", "craft", w, source="judged"))
 

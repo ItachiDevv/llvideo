@@ -20,6 +20,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from llvideo import consistency, frames, probe, schema  # noqa: E402
+from llvideo import craft as craft_mod  # noqa: E402
 from llvideo.errors import ProbeFailed  # noqa: E402
 
 FONT = "C:/Windows/Fonts/arial.ttf" if os.name == "nt" else None
@@ -729,6 +730,108 @@ class TestIntendedSuppression(unittest.TestCase):
         from llvideo.audit import Finding, suppress_intended
         f = [Finding("major", "black_gap", "x", at=6.0)]
         self.assertEqual(suppress_intended(f, None), f)
+
+
+class TestGrokGeneration(unittest.TestCase):
+    """Grok Imagine — xAI, not Groq. Different company, different product."""
+
+    def test_schema_matches_what_the_api_reported(self):
+        """These came from the API's own 422 responses naming its variants."""
+        from llvideo import generate as G
+        self.assertEqual(G.RESOLUTIONS, ("480p", "720p", "1080p"))
+        self.assertIn("16:9", G.ASPECTS)
+        self.assertIn("9:16", G.ASPECTS)
+        self.assertEqual((G.MIN_SECONDS, G.MAX_SECONDS), (1, 15))
+
+    def test_defaults_above_grok_native_480p(self):
+        """Grok returns 848x480 by default, which the auditor flags."""
+        from llvideo import generate as G
+        self.assertEqual(G.DEFAULT_RESOLUTION, "720p")
+
+    def test_pricing_is_per_resolution_not_flat(self):
+        """Measured: 8s@480p = $0.40, 5s@720p = $0.35. A flat rate under-quotes."""
+        from llvideo.generate import estimate
+        self.assertAlmostEqual(estimate(8, "480p")[0], 0.40, places=2)
+        self.assertAlmostEqual(estimate(5, "720p")[0], 0.35, places=2)
+
+    def test_unmeasured_rate_is_flagged(self):
+        from llvideo.generate import estimate
+        self.assertTrue(estimate(5, "720p")[1])
+        self.assertFalse(estimate(5, "1080p")[1], "1080p rate is extrapolated")
+
+    def test_tick_conversion(self):
+        """cost_in_usd_ticks is 1e-10 USD, cross-checked against the image price."""
+        from llvideo.generate import USD_PER_TICK
+        self.assertAlmostEqual(200_000_000 * USD_PER_TICK, 0.02, places=4)
+        self.assertAlmostEqual(4_000_000_000 * USD_PER_TICK, 0.40, places=4)
+
+    def test_duration_out_of_range_rejected_before_spending(self):
+        from llvideo import generate as G
+        from llvideo.errors import LLVideoError
+        for bad in (0, 16, 99):
+            with self.assertRaises(LLVideoError):
+                G.generate_video("x", "out.mp4", seconds=bad)
+
+    def test_bad_resolution_and_aspect_rejected(self):
+        from llvideo import generate as G
+        from llvideo.errors import LLVideoError
+        with self.assertRaises(LLVideoError):
+            G.generate_video("x", "o.mp4", seconds=5, resolution="4k")
+        with self.assertRaises(LLVideoError):
+            G.generate_video("x", "o.mp4", seconds=5, aspect="banana")
+
+    def test_video_to_video_needs_the_right_model(self):
+        """grok-imagine-video-1.5 takes audio, not video, as input."""
+        from llvideo import generate as G
+        from llvideo.errors import LLVideoError
+        if not G.available():
+            self.skipTest("no XAI_API_KEY")
+        with self.assertRaises(LLVideoError):
+            G.generate_video("x", "o.mp4", seconds=5, video=__file__, with_audio=True)
+
+
+@unittest.skipUnless(HAVE_FFMPEG, "ffmpeg not installed")
+class TestSinglePassDetectors(unittest.TestCase):
+    """Chained filters decode once. Two separate calls decode the file twice —
+    measured at 12.7s vs 5.8s on a 19.5s 4K clip."""
+
+    @classmethod
+    def setUpClass(cls):
+        Fixtures.build()
+
+    @classmethod
+    def tearDownClass(cls):
+        Fixtures.teardown()
+
+    def test_video_events_match_separate_calls(self):
+        combined = probe.detect_video_events(str(Fixtures.black_gap), black_dur=0.5)
+        separate = probe.detect_black(str(Fixtures.black_gap), min_dur=0.5)
+        self.assertEqual(len(combined["black"]), len(separate))
+        if separate:
+            self.assertAlmostEqual(combined["black"][0]["start"],
+                                   separate[0]["start"], delta=0.05)
+
+    def test_video_events_returns_both_keys(self):
+        ev = probe.detect_video_events(str(Fixtures.three_scene))
+        self.assertIn("black", ev)
+        self.assertIn("freeze", ev)
+
+    def test_audio_events_returns_loudness_and_silence(self):
+        ev = probe.detect_audio_events(str(Fixtures.three_scene))
+        self.assertIn("integrated_lufs", ev)
+        self.assertIn("silence", ev)
+        self.assertIsNotNone(ev["integrated_lufs"], "ebur128 should report a value")
+
+    def test_luma_profile_single_pass_still_finds_black(self):
+        """The optimisation must not lose the fade-to-black signal."""
+        prof = craft_mod.luma_profile(str(Fixtures.black_gap), 2.5, 6.5, samples=12)
+        self.assertTrue(prof)
+        self.assertLessEqual(prof["min"], 20.0)
+        self.assertIn("BLACK", prof["verdict"].upper())
+
+    def test_luma_profile_thins_to_sample_count(self):
+        prof = craft_mod.luma_profile(str(Fixtures.three_scene), 0.0, 12.0, samples=10)
+        self.assertLessEqual(len(prof["points"]), 12)
 
 
 if __name__ == "__main__":

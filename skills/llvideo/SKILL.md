@@ -86,6 +86,45 @@ Clipping is frame-exact and costs a few hundred tokens. Use it freely.
 
 ---
 
+## Generating supplemental clips — `gen`
+
+Short clips that slot into a timeline built elsewhere: an establishing shot, b-roll,
+texture, a logo sting. Not whole films.
+
+```bash
+llvideo gen "slow aerial push over a misty pine forest at dawn" --seconds 5
+llvideo gen "logo settles into frame" --image logo.png --seconds 3    # image-to-video
+llvideo gen "same scene, colder grade" --video clip.mp4 --seconds 5   # video-to-video
+llvideo gen-image "weathered wood title card" --out title.png
+```
+
+Runs on **Grok Imagine** through your existing `XAI_API_KEY`. Note this is xAI's Grok,
+not Groq — different company. **1 to 15 seconds** in one-second steps, which is more
+flexible than Veo's fixed 4/6/8.
+
+| resolution | measured cost |
+|---|---|
+| 480p | $0.05/s |
+| 720p | $0.07/s |
+| 1080p | ~$0.11/s (extrapolated, not measured) |
+
+Those rates came from the API's own usage field on real jobs, not from documentation.
+Anything over $1.00 needs `--yes`.
+
+**Every clip is audited on arrival**, and that is not decoration. Grok's own defaults
+produce 848x480 at about -21 LUFS — both of which the auditor flags. `gen` defaults to
+720p for that reason. Then look at it yourself:
+
+```bash
+llvideo sheet clip.mp4
+```
+
+`--audio` switches to `grok-imagine-video-1.5`, which generates a soundtrack.
+Generated audio tends to come back quiet; expect a loudness finding and normalise in
+post if the clip is going next to other material.
+
+---
+
 ## Auditing a video you MADE — `spec` + `--from-project`
 
 This is the whole loop. HyperFrames, brag and Remotion all already know what they
@@ -389,6 +428,8 @@ file. Use llvideo on the **rendered output**; use hyperframes on the **live comp
 | `craft` | ~$0.02/min | transitions, camera moves, shots, pacing, grade |
 | `audit` | **free** | render QA: black frames, loudness, dead air, spec diff |
 | `spec` | **free** | extract intent from a HyperFrames / brag / Remotion project |
+| `gen` | ~$0.07/s | generate a 1-15s supplemental clip (Grok Imagine), auto-audited |
+| `gen-image` | ~$0.02 | generate a still — title card, texture, image-to-video seed |
 | `clip --start --end` | ~$0.003 | frame-exact deep dive on a window |
 | `providers` | free | which backends are usable |
 | `clean` | free | delete scratch files and uploads |

@@ -179,6 +179,8 @@ code on screen, dashboard numbers. Each run costs about the same as the first.
 | `craft` | ~$0.02/min | transitions, camera moves, shots, pacing, grade |
 | `audit` | **free** | render QA: black frames, loudness, dead air, spec diff |
 | `spec` | **free** | extract intent from a HyperFrames / brag / Remotion project |
+| `gen` | ~$0.07/s | generate a 1-15s supplemental clip (Grok Imagine), auto-audited |
+| `gen-image` | ~$0.02 | generate a still — title card, texture, image-to-video seed |
 | `clip --start --end` | ~$0.003 | frame-exact deep dive on a window |
 | `providers` | free | which backends are usable |
 | `clean` | free | delete scratch files and uploads |

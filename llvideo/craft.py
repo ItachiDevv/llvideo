@@ -205,19 +205,37 @@ def luma_profile(src: str, start: float, end: float, samples: int = 24) -> dict:
     from .probe import run, _require
     _require("ffmpeg")
     span = max(end - start, 0.01)
-    step = span / max(samples - 1, 1)
-    points: list[tuple[float, float]] = []
-    for i in range(samples):
-        t = start + i * step
-        cp = run(["ffmpeg", "-hide_banner", "-nostdin", "-ss", f"{t:.3f}", "-i", src,
-                  "-frames:v", "1", "-vf",
-                  "scale=64:36,signalstats,metadata=print:file=-", "-f", "null", "-"],
-                 timeout=60)
-        m = re.search(r"YAVG=([0-9.]+)", cp.stdout or "")
+
+    # ONE decode pass over the window, not one ffmpeg process per sample.
+    # The per-sample version spawned 24 processes per window — measured at 32.7s
+    # for four windows, which was 80% of the whole craft command's runtime.
+    # Seeking and re-decoding 96 times to read 96 numbers is the slow way to do
+    # something ffmpeg will stream in a single pass.
+    cp = run(["ffmpeg", "-hide_banner", "-nostdin",
+              "-ss", f"{max(start, 0):.3f}", "-t", f"{span:.3f}", "-i", src,
+              "-vf", "scale=64:36,signalstats,metadata=print:file=-",
+              "-f", "null", "-"], timeout=180)
+
+    raw: list[tuple[float, float]] = []
+    t_cur = None
+    for line in (cp.stdout or "").splitlines():
+        m = re.search(rf"pts_time:({_TIME})", line)
         if m:
-            points.append((round(t, 3), round(float(m.group(1)), 2)))
-    if not points:
+            t_cur = float(m.group(1))
+            continue
+        m = re.search(r"YAVG=([0-9.]+)", line)
+        if m and t_cur is not None:
+            raw.append((round(start + t_cur, 3), round(float(m.group(1)), 2)))
+            t_cur = None
+    if not raw:
         return {}
+
+    # Thin to roughly `samples` evenly spaced points so the prompt stays small.
+    if len(raw) > samples:
+        stride = len(raw) / samples
+        points = [raw[min(int(i * stride), len(raw) - 1)] for i in range(samples)]
+    else:
+        points = raw
 
     vals = [v for _, v in points]
     lo, hi = min(vals), max(vals)

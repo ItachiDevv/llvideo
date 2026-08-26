@@ -326,3 +326,58 @@ def select_frame_times(duration: float, scene_times: list[float] | None = None,
         return ordered
     keep = max(1, len(ordered) // max_frames)
     return ordered[::keep][:max_frames]
+
+
+def detect_video_events(src: str, *, black_dur: float = 0.4, black_th: float = 0.98,
+                        freeze_dur: float = 2.0, freeze_noise: str = "-60dB") -> dict:
+    """blackdetect and freezedetect in ONE decode pass.
+
+    Running them separately means decoding the whole file twice. Measured on a
+    19.5s 4K clip: two passes took 12.7s, one takes about half that. Filters
+    chain in a single -vf, and each writes its own labelled lines to stderr.
+    """
+    log = _ffmpeg_filter_log(
+        src, ["-vf", f"blackdetect=d={black_dur}:pic_th={black_th},"
+                     f"freezedetect=n={freeze_noise}:d={freeze_dur}"])
+    black = [{"start": float(m.group(1)), "end": float(m.group(2)),
+              "duration": float(m.group(3))}
+             for m in re.finditer(
+                 rf"black_start:({_TIME})\s+black_end:({_TIME})\s+black_duration:({_TIME})",
+                 log)]
+    starts = [float(m.group(1)) for m in re.finditer(rf"freeze_start:\s*({_TIME})", log)]
+    ends = [float(m.group(1)) for m in re.finditer(rf"freeze_end:\s*({_TIME})", log)]
+    freeze = []
+    for i, s in enumerate(starts):
+        e = ends[i] if i < len(ends) else None
+        freeze.append({"start": s, "end": e,
+                       "duration": (e - s) if e is not None else None})
+    return {"black": black, "freeze": freeze}
+
+
+def detect_audio_events(src: str, *, noise: str = "-30dB", min_dur: float = 0.5) -> dict:
+    """Loudness, true peak and silence in ONE decode pass.
+
+    Same reasoning as detect_video_events: ebur128 and silencedetect chain in a
+    single -af, so the audio is decoded once rather than twice.
+    """
+    log = _ffmpeg_filter_log(
+        src, ["-af", f"ebur128=peak=true,silencedetect=n={noise}:d={min_dur}", "-vn"])
+    tail = log[-6000:]
+
+    def grab(label: str) -> float | None:
+        m = re.search(rf"{label}:\s*(-?\d+\.?\d*)", tail)
+        return float(m.group(1)) if m else None
+
+    starts = [float(m.group(1)) for m in re.finditer(rf"silence_start:\s*({_TIME})", log)]
+    ends = [float(m.group(1)) for m in re.finditer(rf"silence_end:\s*({_TIME})", log)]
+    silence = []
+    for i, s in enumerate(starts):
+        e = ends[i] if i < len(ends) else None
+        silence.append({"start": s, "end": e,
+                        "duration": (e - s) if e is not None else None})
+    return {
+        "integrated_lufs": grab("I"),
+        "true_peak_dbfs": grab("Peak"),
+        "loudness_range": grab("LRA"),
+        "silence": silence,
+    }

@@ -288,6 +288,18 @@ def cmd_spec(args) -> int:
     return 0
 
 
+def cmd_gen(args) -> int:
+    """Generate a short clip with Grok Imagine, then audit it."""
+    from . import cli_gen
+    return cli_gen.run(args, _out, _fmt_ts)
+
+
+def cmd_genimage(args) -> int:
+    """Generate a still with Grok Imagine."""
+    from . import cli_gen
+    return cli_gen.run_image(args, _out, _fmt_ts)
+
+
 def cmd_sheet(args) -> int:
     """T4 — build a contact sheet for the agent to read with its own eyes."""
     pr = P.probe(args.source)
@@ -499,6 +511,38 @@ def build_parser() -> argparse.ArgumentParser:
                    help="force the project type instead of detecting it")
     p.add_argument("--out", default=None, help="write the spec JSON here")
     p.set_defaults(func=cmd_spec)
+
+    p = common(sub.add_parser("gen",
+        help="generate a short supplemental clip (Grok Imagine), then audit it"),
+        source=False)
+    p.add_argument("prompt", help="what the clip should show")
+    p.add_argument("--out", default=None, help="where to write the mp4")
+    p.add_argument("--seconds", type=int, default=6,
+                   help="1-15 seconds (default 6)")
+    p.add_argument("--resolution", choices=list(__import__("llvideo.generate",
+                   fromlist=["RESOLUTIONS"]).RESOLUTIONS), default="720p",
+                   help="Grok defaults to 480p, which the auditor flags; 720p here")
+    p.add_argument("--aspect", default="16:9",
+                   choices=list(__import__("llvideo.generate",
+                   fromlist=["ASPECTS"]).ASPECTS))
+    p.add_argument("--image", default=None, help="seed image for image-to-video")
+    p.add_argument("--video", default=None, help="seed clip for video-to-video")
+    p.add_argument("--audio", action="store_true",
+                   help="generate an audio track too (uses grok-imagine-video-1.5)")
+    p.add_argument("--model", default=None)
+    p.add_argument("--no-audit", action="store_true",
+                   help="skip the automatic QA pass (not recommended)")
+    p.add_argument("--yes", action="store_true", help="approve a job over $1.00")
+    p.set_defaults(func=cmd_gen)
+
+    p = common(sub.add_parser("gen-image",
+        help="generate a still (title card, texture, image-to-video seed)"),
+        source=False)
+    p.add_argument("prompt")
+    p.add_argument("--out", default=None)
+    p.add_argument("--reference", default=None,
+                   help="reference image, for style or character consistency")
+    p.set_defaults(func=cmd_genimage)
 
     p = common(sub.add_parser("sheet", help="contact sheet for the agent to read itself"))
     p.add_argument("--at", default=None, help="comma-separated timestamps")
