@@ -17,6 +17,7 @@ llvideo index recording.mp4
 llvideo ask clip.mp4 -q "what error message appears?"  --verify 3
 llvideo craft edit.mp4                       # transitions, camera moves, pacing
 llvideo audit out.mp4                        # QA your own render before shipping
+llvideo audit out.mp4 --from-project ./proj  # diff it against what the project meant
 llvideo ask "https://youtube.com/watch?v=..." -q "when do they announce the price?"
 ```
 
@@ -102,6 +103,24 @@ Verified: catches 5 of 5 planted defects, and returns CLEAN with zero findings o
 professional footage. Every finding is labelled **measured** (ffmpeg, with the number)
 or **judged** (a model's opinion).
 
+## Auditing a video you made
+
+HyperFrames, brag and Remotion all record what they meant to build. `llvideo` reads it
+and diffs the rendered file against it — no hand-written spec:
+
+```bash
+llvideo audit render.mp4 --from-project ./my-project
+```
+
+Scene timing comes from HyperFrames `data-start`/`data-duration` or Remotion
+`<Sequence from= durationInFrames=>`; transition types from `STORYBOARD.md`. Values
+that cannot be read statically (a `springTiming` duration, a computed `from=`) are
+flagged and skipped rather than guessed.
+
+**This fills a real gap.** HyperFrames `check` validates the pre-render timeline in
+headless Chrome, brag stops at pre-render snapshots, and Remotion has no gate at all —
+none of them inspect the exported MP4. An encoder bug or a stale render ships unseen.
+
 ## Analysing the edit, not the content
 
 `craft` answers "how is this cut" — transitions with exact durations, shot sizes,
@@ -159,6 +178,7 @@ code on screen, dashboard numbers. Each run costs about the same as the first.
 | `ask -q` | ~$0.005/min | one question, answered with citations |
 | `craft` | ~$0.02/min | transitions, camera moves, shots, pacing, grade |
 | `audit` | **free** | render QA: black frames, loudness, dead air, spec diff |
+| `spec` | **free** | extract intent from a HyperFrames / brag / Remotion project |
 | `clip --start --end` | ~$0.003 | frame-exact deep dive on a window |
 | `providers` | free | which backends are usable |
 | `clean` | free | delete scratch files and uploads |

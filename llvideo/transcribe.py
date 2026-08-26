@@ -103,3 +103,135 @@ def transcribe(src: str, model: str = "small", language: str | None = None,
     finally:
         if cleanup_dir:
             shutil.rmtree(cleanup_dir, ignore_errors=True)
+
+
+# ---------------------------------------------------------------------------
+# Groq — hosted whisper-large-v3-turbo
+#
+# The reason this exists: on this CPU, local `small` runs at 3.73x realtime and
+# is the weakest usable Whisper tier, while local `large-v3` runs at 0.18x —
+# 56 minutes for a 10-minute video, unusable. Groq serves a distilled large-v3
+# at roughly 200x realtime for $0.04 per hour of audio, so a 10-minute video
+# costs about $0.007 and finishes in seconds.
+#
+# That is better on both speed and accuracy. Local stays the default only
+# because it needs no key, no network, and costs nothing.
+# ---------------------------------------------------------------------------
+
+GROQ_URL = "https://api.groq.com/openai/v1/audio/transcriptions"
+GROQ_MODEL = "whisper-large-v3-turbo"
+GROQ_MAX_BYTES = 24 * 1024 ** 2      # 25MB free tier; stay under it
+
+
+def groq_available() -> bool:
+    from .providers.base import read_key
+    return bool(read_key("GROQ_API_KEY"))
+
+
+def transcribe_groq(src: str, model: str = GROQ_MODEL,
+                    language: str | None = None) -> dict:
+    """Hosted transcription with word-level timestamps."""
+    import json as _json
+    import time
+    import urllib.error
+    import urllib.request
+    import uuid
+
+    from .providers.base import read_key
+    from .errors import ProviderError
+
+    key = read_key("GROQ_API_KEY")
+    if not key:
+        raise MissingDependency(
+            "GROQ_API_KEY is not set. Get one at https://console.groq.com/keys and put it "
+            "in the environment or in ~/.itachi-api-keys.\n"
+            "Or use the local backend instead — it is free and needs no key:\n"
+            "  llvideo transcribe VIDEO --backend local"
+        )
+
+    audio_path = extract_audio(src)
+    cleanup_dir = Path(audio_path).parent
+    try:
+        size = Path(audio_path).stat().st_size
+        if size > GROQ_MAX_BYTES:
+            raise LLVideoError(
+                f"Extracted audio is {size / 1024**2:.0f} MB, over Groq's 25 MB limit. "
+                f"Use the local backend for long files, or split the audio first."
+            )
+        data = Path(audio_path).read_bytes()
+
+        boundary = f"----llvideo{uuid.uuid4().hex}"
+        parts: list[bytes] = []
+
+        def field(name: str, value: str) -> None:
+            parts.append(
+                f"--{boundary}\r\nContent-Disposition: form-data; name=\"{name}\"\r\n\r\n"
+                f"{value}\r\n".encode())
+
+        parts.append(
+            f"--{boundary}\r\nContent-Disposition: form-data; name=\"file\"; "
+            f"filename=\"audio.wav\"\r\nContent-Type: audio/wav\r\n\r\n".encode())
+        parts.append(data)
+        parts.append(b"\r\n")
+        field("model", model)
+        field("response_format", "verbose_json")
+        field("timestamp_granularities[]", "word")
+        field("timestamp_granularities[]", "segment")
+        if language:
+            field("language", language)
+        parts.append(f"--{boundary}--\r\n".encode())
+        body = b"".join(parts)
+
+        req = urllib.request.Request(
+            GROQ_URL, data=body,
+            headers={"Authorization": f"Bearer {key}",
+                     "Content-Type": f"multipart/form-data; boundary={boundary}"})
+        t0 = time.time()
+        try:
+            with urllib.request.urlopen(req, timeout=600) as resp:
+                payload = _json.loads(resp.read())
+        except urllib.error.HTTPError as exc:
+            detail = exc.read().decode("utf-8", "replace")[:400]
+            raise ProviderError(f"Groq rejected the request: HTTP {exc.code} {detail}") from exc
+        except urllib.error.URLError as exc:
+            raise ProviderError(f"Could not reach Groq: {exc.reason}") from exc
+        elapsed = time.time() - t0
+
+        segs = [{"start": round(s.get("start", 0.0), 3),
+                 "end": round(s.get("end", 0.0), 3),
+                 "text": s.get("text", "")}
+                for s in (payload.get("segments") or [])]
+        words = [{"start": round(w.get("start", 0.0), 3),
+                  "end": round(w.get("end", 0.0), 3),
+                  "word": w.get("word", "")}
+                 for w in (payload.get("words") or [])]
+        duration = float(payload.get("duration") or 0.0)
+        return {
+            "text": (payload.get("text") or "").strip(),
+            "segments": segs,
+            "words": words,
+            "language": payload.get("language"),
+            "duration": round(duration, 2),
+            "model": model,
+            "backend": "groq",
+            "inference_seconds": round(elapsed, 2),
+            "realtime_factor": round(duration / elapsed, 1) if elapsed else None,
+            "estimated_cost_usd": round(duration / 3600 * 0.04, 5),
+            "warning": None,
+        }
+    finally:
+        shutil.rmtree(cleanup_dir, ignore_errors=True)
+
+
+def transcribe_auto(src: str, backend: str = "auto", model: str | None = None,
+                    language: str | None = None) -> dict:
+    """Pick a backend. Local is the default because it is free and offline."""
+    if backend == "groq":
+        return transcribe_groq(src, model=model or GROQ_MODEL, language=language)
+    if backend == "local":
+        return transcribe(src, model=model or "small", language=language)
+    if backend == "auto":
+        if groq_available():
+            return transcribe_groq(src, model=model or GROQ_MODEL, language=language)
+        return transcribe(src, model=model or "small", language=language)
+    raise LLVideoError(f"Unknown transcription backend '{backend}'. Use local, groq or auto.")

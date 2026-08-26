@@ -404,6 +404,44 @@ def compare_intent(intent: dict, pr: P.Probe, craft_data: dict | None) -> list[F
     return out
 
 
+def suppress_intended(findings: list[Finding], intent: dict | None,
+                      tolerance: float = 1.2) -> list[Finding]:
+    """Drop 'defects' the spec explicitly asked for.
+
+    A fade-to-black IS a stretch of black frames. Reporting it as a defect when
+    the storyboard called for it there is a false positive, and false positives
+    are how an auditor loses its reader. Only suppress where intent lines up in
+    both kind and time.
+    """
+    if not intent:
+        return findings
+    fades = []
+    for t in (intent.get("transitions") or []):
+        kind = str(t.get("kind", ""))
+        if "black" in kind:
+            at = _sec(t.get("at"))
+            if at is not None:
+                fades.append((at, float(t.get("duration_seconds") or 0.5)))
+    if not fades:
+        return findings
+
+    kept = []
+    for f in findings:
+        if f.check == "black_gap" and f.at is not None:
+            near = any(abs(f.at - at) <= tolerance + dur for at, dur in fades)
+            if near:
+                dur = (f.measured or {}).get("duration")
+                span = f"{dur:.2f}s" if isinstance(dur, (int, float)) else "A stretch"
+                kept.append(Finding(
+                    "note", "black_gap",
+                    f"{span} of black at {_fmt(f.at)}, which matches a fade-to-black "
+                    f"the spec asked for. Expected, not a defect.",
+                    at=f.at, measured=f.measured))
+                continue
+        kept.append(f)
+    return kept
+
+
 def summarise(findings: list[Finding]) -> dict:
     counts = {s: sum(1 for f in findings if f.severity == s) for s in SEVERITIES}
     worst = next((s for s in SEVERITIES if counts[s]), None)

@@ -86,6 +86,46 @@ Clipping is frame-exact and costs a few hundred tokens. Use it freely.
 
 ---
 
+## Auditing a video you MADE — `spec` + `--from-project`
+
+This is the whole loop. HyperFrames, brag and Remotion all already know what they
+meant to build, so nobody should hand-write an intent spec:
+
+```bash
+llvideo audit render.mp4 --from-project ./my-hyperframes-project
+llvideo audit brag-output/brag.mp4 --from-project ./brag-output
+llvideo audit out.mp4 --from-project ./my-remotion-project
+```
+
+Or extract the spec on its own to inspect or edit it:
+
+```bash
+llvideo spec ./project --out intent.json
+```
+
+**Where the intent comes from, and how much to trust it:**
+
+| Source | What is extracted | Confidence |
+|---|---|---|
+| HyperFrames `index.html` | scene start/end from `data-start` / `data-duration`, on-screen text from the DOM | exact |
+| HyperFrames `STORYBOARD.md` | transition type and duration per frame (`transition_in`) | authored intent |
+| brag | reads the HyperFrames project it builds under `composition/`; cross-checks `brag-plan.md` scene count and total | exact + cross-check |
+| Remotion `.tsx` | `<Sequence from= durationInFrames=>` ÷ fps; `<TransitionSeries.Transition presentation=>` | exact for literal and `N * fps`; computed values are **skipped, not guessed** |
+
+Anything that cannot be read statically is reported as a note rather than assumed —
+a `springTiming` duration or a `from={computeIt()}` is flagged and excluded.
+
+**Why this exists.** HyperFrames `check` validates the seeked composition timeline in
+headless Chrome. brag's delivery gate stops at pre-render snapshots. Remotion has no
+equivalent gate at all. **None of them look at the exported MP4**, so an encoder bug,
+a stale render, or dropped frames at export ship unnoticed. That gap is what this
+fills — and it is why `audit` is worth running even when the project's own checks pass.
+
+A fade-to-black the spec asked for is not reported as a black-frame defect. Only
+undeclared black is a finding.
+
+---
+
 ## Transitions, camera and pacing — `craft`
 
 For "how is this cut", "what transitions are used", "analyse the edit", "what is the
@@ -251,11 +291,18 @@ The index includes speech with timestamps, which is enough for context. When you
 llvideo transcribe VIDEO
 ```
 
-`small` is the default and the only practical size on CPU (3.7× realtime; a 10-minute
-track takes about 2.7 minutes). `medium` is 0.82× and `large-v3` is 0.18× — slower than
-the video itself. The CLI warns if you pick one.
+Two backends:
 
-Needs `pip install faster-whisper`.
+- **`--backend local`** (default) — faster-whisper `small`, free, offline, no key.
+  3.7× realtime, so a 10-minute track takes about 2.7 minutes. `medium` is 0.82× and
+  `large-v3` is 0.18× on this CPU — both slower than the video itself, so `small` is
+  the only practical local size. Needs `pip install faster-whisper`.
+- **`--backend groq`** — hosted `whisper-large-v3-turbo`. Roughly 200× realtime and
+  about **$0.007 for a 10-minute video**, with word-level timestamps. Better on both
+  speed and accuracy than local `small`; local stays the default only because it needs
+  no key, no network and costs nothing. Needs `GROQ_API_KEY`. 25 MB audio limit, so
+  long files still go local.
+- **`--backend auto`** — Groq when a key exists, local otherwise.
 
 ---
 
@@ -341,6 +388,7 @@ file. Use llvideo on the **rendered output**; use hyperframes on the **live comp
 | `ask -q` | ~$0.005/min | one question, answered with citations |
 | `craft` | ~$0.02/min | transitions, camera moves, shots, pacing, grade |
 | `audit` | **free** | render QA: black frames, loudness, dead air, spec diff |
+| `spec` | **free** | extract intent from a HyperFrames / brag / Remotion project |
 | `clip --start --end` | ~$0.003 | frame-exact deep dive on a window |
 | `providers` | free | which backends are usable |
 | `clean` | free | delete scratch files and uploads |

@@ -255,6 +255,39 @@ def cmd_audit(args) -> int:
     return cli_audit.run(args, _out, _fmt_ts)
 
 
+def cmd_spec(args) -> int:
+    """Extract an intent spec from a video project so `audit --spec` can use it."""
+    from . import spec as SP
+    sp = SP.extract(args.source, kind=args.kind)
+    intent = sp.to_intent()
+    if args.out:
+        import json as _json
+        Path(args.out).write_text(_json.dumps(intent, indent=2), encoding='utf-8')
+
+    def human(_):
+        print(f"{sp.kind}  {sp.project}")
+        if sp.width:
+            print(f"  {sp.width}x{sp.height} @ {sp.fps or '?'}fps"
+                  + (f"  {sp.duration_seconds:.2f}s" if sp.duration_seconds else ''))
+        print(f"  {len(sp.scenes)} scenes, "
+              f"{len(intent.get('transitions') or [])} declared transitions")
+        print()
+        for sc in sp.scenes:
+            t = sc.transition_out or {}
+            arrow = f"  -> {t.get('kind')} {t.get('duration_seconds')}s" if t else ''
+            txt = ('  "' + sc.text[0][:44] + '"') if sc.text else ''
+            print(f"  {_fmt_ts(sc.start)}-{_fmt_ts(sc.end)}  {sc.id:20s}{txt}{arrow}")
+        for n in sp.notes:
+            print()
+            print(f"  ! {n}")
+        if args.out:
+            print()
+            print(f"  written to {args.out}")
+            print(f"  now run:  llvideo audit <render.mp4> --spec {args.out}")
+    _out(intent, args.json, human)
+    return 0
+
+
 def cmd_sheet(args) -> int:
     """T4 — build a contact sheet for the agent to read with its own eyes."""
     pr = P.probe(args.source)
@@ -330,8 +363,9 @@ def cmd_signals(args) -> int:
 
 
 def cmd_transcribe(args) -> int:
-    from .transcribe import transcribe
-    r = transcribe(args.source, model=args.model_size, language=args.language)
+    from .transcribe import transcribe_auto
+    r = transcribe_auto(args.source, backend=args.backend,
+                        model=args.model_size, language=args.language)
     _out(r, args.json, lambda _: [
         print(f"[{_fmt_ts(s['start'])}] {s['text'].strip()}") for s in r["segments"]])
     return 0
@@ -446,6 +480,9 @@ def build_parser() -> argparse.ArgumentParser:
         help="QA a rendered video - black frames, loudness, dead air, spec diff")))
     p.add_argument("--spec", default=None,
                    help="intent spec JSON to diff the render against")
+    p.add_argument("--from-project", default=None, metavar="DIR",
+                   help="extract the spec straight from a HyperFrames / brag / "
+                        "Remotion project and diff against it")
     p.add_argument("--craft", action="store_true",
                    help="also analyse transitions and camera (costs tokens)")
     p.add_argument("--no-margins", action="store_true",
@@ -455,6 +492,13 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--max-windows", type=int, default=8,
                    help="how many transitions to inspect closely")
     p.set_defaults(func=cmd_audit)
+
+    p = common(sub.add_parser("spec",
+        help="extract an intent spec from a HyperFrames / brag / Remotion project"))
+    p.add_argument("--kind", choices=["hyperframes", "brag", "remotion"], default=None,
+                   help="force the project type instead of detecting it")
+    p.add_argument("--out", default=None, help="write the spec JSON here")
+    p.set_defaults(func=cmd_spec)
 
     p = common(sub.add_parser("sheet", help="contact sheet for the agent to read itself"))
     p.add_argument("--at", default=None, help="comma-separated timestamps")
@@ -480,8 +524,13 @@ def build_parser() -> argparse.ArgumentParser:
     p.set_defaults(func=cmd_signals)
 
     p = common(sub.add_parser("transcribe", help="local word-level transcript, free"))
-    p.add_argument("--model-size", default="small",
-                   help="small is the only practical size on CPU (3.7x realtime)")
+    p.add_argument("--backend", choices=["auto", "local", "groq"], default="local",
+                   help="local = free, offline, faster-whisper small (default). "
+                        "groq = hosted large-v3-turbo, ~200x realtime, ~$0.007 per "
+                        "10-min video, needs GROQ_API_KEY. auto = groq if a key exists.")
+    p.add_argument("--model-size", default=None,
+                   help="local: small is the only practical size on CPU (3.7x realtime). "
+                        "groq: defaults to whisper-large-v3-turbo")
     p.add_argument("--language", default=None)
     p.set_defaults(func=cmd_transcribe)
 

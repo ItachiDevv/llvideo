@@ -589,5 +589,147 @@ class TestIntentDiff(unittest.TestCase):
             audit.load_intent("definitely_not_a_real_spec.json")
 
 
+class TestSpecExtraction(unittest.TestCase):
+    """Nobody should hand-write an intent spec — the project already knows."""
+
+    def setUp(self):
+        self.dir = Path(tempfile.mkdtemp(prefix="llvideo_spec_"))
+
+    def tearDown(self):
+        shutil.rmtree(self.dir, ignore_errors=True)
+
+    def _hf(self, storyboard: str | None = None):
+        (self.dir / "hyperframes.json").write_text(
+            '{"width":1920,"height":1080,"fps":30}', encoding="utf-8")
+        (self.dir / "index.html").write_text(
+            '<div id="root" data-duration="10" data-width="1920" data-height="1080">'
+            '<section id="a" class="clip" data-start="0" data-duration="4"><h1>Hello</h1></section>'
+            '<section id="b" class="clip" data-start="4" data-duration="6"><h1>World</h1></section>'
+            '</div>', encoding="utf-8")
+        if storyboard:
+            (self.dir / "STORYBOARD.md").write_text(storyboard, encoding="utf-8")
+        return str(self.dir)
+
+    def test_reads_timing_from_data_attributes(self):
+        from llvideo import spec
+        sp = spec.extract(self._hf())
+        self.assertEqual(len(sp.scenes), 2)
+        self.assertAlmostEqual(sp.scenes[0].start, 0.0)
+        self.assertAlmostEqual(sp.scenes[0].end, 4.0)
+        self.assertAlmostEqual(sp.scenes[1].end, 10.0)
+
+    def test_extracts_on_screen_text(self):
+        from llvideo import spec
+        sp = spec.extract(self._hf())
+        self.assertIn("Hello", " ".join(sp.scenes[0].text))
+
+    def test_derives_aspect_and_duration(self):
+        from llvideo import spec
+        intent = spec.extract(self._hf()).to_intent()
+        self.assertEqual(intent["aspect"], "16:9")
+        self.assertAlmostEqual(intent["duration_seconds"], 10.0)
+
+    def test_storyboard_transition_maps_to_previous_scene(self):
+        """transition_in on frame N is the transition OUT of frame N-1."""
+        from llvideo import spec
+        sb = "\n".join([
+            "### Frame 1 - a",
+            "- transition_in: cut",
+            "",
+            "### Frame 2 - b",
+            "- transition_in: crossfade",
+            "- transition_duration: 0.6",
+            "",
+        ])
+        sp = spec.extract(self._hf(sb))
+        self.assertIsNotNone(sp.scenes[0].transition_out)
+        self.assertEqual(sp.scenes[0].transition_out["kind"], "crossfade")
+        self.assertAlmostEqual(sp.scenes[0].transition_out["duration_seconds"], 0.6)
+
+    def test_no_storyboard_means_no_invented_transitions(self):
+        from llvideo import spec
+        sp = spec.extract(self._hf())
+        self.assertTrue(all(s.transition_out is None for s in sp.scenes))
+        self.assertTrue(any("not declared" in n or "no authored" in n.lower()
+                            for n in sp.notes))
+
+    def test_transition_aliases_normalise(self):
+        from llvideo.spec import normalise_transition
+        self.assertEqual(normalise_transition("cut"), "hard_cut")
+        self.assertEqual(normalise_transition("dissolve"), "crossfade")
+        self.assertEqual(normalise_transition("fade to black"), "fade_to_black")
+        self.assertEqual(normalise_transition("clockWipe"), "wipe")
+        self.assertIsNone(normalise_transition(None))
+
+    def test_unknown_project_says_so(self):
+        from llvideo import spec
+        from llvideo.errors import LLVideoError
+        with self.assertRaises(LLVideoError):
+            spec.detect(str(self.dir))
+
+
+class TestRemotionSpec(unittest.TestCase):
+    def setUp(self):
+        self.dir = Path(tempfile.mkdtemp(prefix="llvideo_rem_"))
+        (self.dir / "src").mkdir()
+        (self.dir / "remotion.config.ts").write_text("// config", encoding="utf-8")
+        (self.dir / "src" / "Root.tsx").write_text(
+            '<Composition id="X" durationInFrames={300} fps={30} width={1920} height={1080} />',
+            encoding="utf-8")
+
+    def tearDown(self):
+        shutil.rmtree(self.dir, ignore_errors=True)
+
+    def _write(self, body):
+        (self.dir / "src" / "Promo.tsx").write_text(body, encoding="utf-8")
+        from llvideo import spec
+        return spec.extract(str(self.dir), kind="remotion")
+
+    def test_literal_and_fps_expressions_both_resolve(self):
+        sp = self._write(
+            "<Sequence from={0} durationInFrames={4 * fps}><A/></Sequence>"
+            "<Sequence from={120} durationInFrames={90}><B/></Sequence>")
+        self.assertEqual(len(sp.scenes), 2)
+        self.assertAlmostEqual(sp.scenes[0].end, 4.0)
+        self.assertAlmostEqual(sp.scenes[1].start, 4.0)
+        self.assertAlmostEqual(sp.scenes[1].end, 7.0)
+
+    def test_computed_values_are_skipped_not_guessed(self):
+        sp = self._write("<Sequence from={computeIt()} durationInFrames={dyn}><A/></Sequence>")
+        self.assertEqual(len(sp.scenes), 0)
+        self.assertTrue(any("cannot be read statically" in n for n in sp.notes))
+
+    def test_spring_timing_flagged_as_unreadable(self):
+        sp = self._write(
+            "<Sequence from={0} durationInFrames={60}><A/></Sequence>"
+            "<TransitionSeries.Transition presentation={fade()} "
+            "timing={springTiming({config:{damping:200}})} />")
+        self.assertTrue(any("springTiming" in n for n in sp.notes))
+
+
+class TestIntendedSuppression(unittest.TestCase):
+    def test_declared_fade_to_black_is_not_a_defect(self):
+        from llvideo.audit import Finding, suppress_intended
+        f = [Finding("major", "black_gap", "0.43s of black at 00:17.", at=17.0,
+                     measured={"duration": 0.43})]
+        intent = {"transitions": [{"at": "00:17", "kind": "fade_to_black",
+                                   "duration_seconds": 0.8}]}
+        out = suppress_intended(f, intent)
+        self.assertEqual(out[0].severity, "note")
+        self.assertIn("Expected", out[0].message)
+
+    def test_undeclared_black_gap_still_a_defect(self):
+        from llvideo.audit import Finding, suppress_intended
+        f = [Finding("major", "black_gap", "2s of black at 00:06.", at=6.0,
+                     measured={"duration": 2.0})]
+        intent = {"transitions": [{"at": "00:17", "kind": "fade_to_black"}]}
+        self.assertEqual(suppress_intended(f, intent)[0].severity, "major")
+
+    def test_no_intent_changes_nothing(self):
+        from llvideo.audit import Finding, suppress_intended
+        f = [Finding("major", "black_gap", "x", at=6.0)]
+        self.assertEqual(suppress_intended(f, None), f)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
