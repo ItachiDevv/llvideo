@@ -249,6 +249,12 @@ def cmd_craft(args) -> int:
     return cli_craft.run(args, _out, _fmt_ts)
 
 
+def cmd_audit(args) -> int:
+    """QA a rendered video. Implementation in cli_audit.py."""
+    from . import cli_audit
+    return cli_audit.run(args, _out, _fmt_ts)
+
+
 def cmd_sheet(args) -> int:
     """T4 — build a contact sheet for the agent to read with its own eyes."""
     pr = P.probe(args.source)
@@ -435,6 +441,20 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--no-zoom", action="store_true",
                    help="skip the high-fps pass - cheaper, much less accurate")
     p.set_defaults(func=cmd_craft)
+
+    p = modelargs(common(sub.add_parser("audit",
+        help="QA a rendered video - black frames, loudness, dead air, spec diff")))
+    p.add_argument("--spec", default=None,
+                   help="intent spec JSON to diff the render against")
+    p.add_argument("--craft", action="store_true",
+                   help="also analyse transitions and camera (costs tokens)")
+    p.add_argument("--no-margins", action="store_true",
+                   help="skip the title-safe margin sampling")
+    p.add_argument("--zoom-fps", type=float, default=8.0,
+                   help="fps inside each transition window for --craft / --spec")
+    p.add_argument("--max-windows", type=int, default=8,
+                   help="how many transitions to inspect closely")
+    p.set_defaults(func=cmd_audit)
 
     p = common(sub.add_parser("sheet", help="contact sheet for the agent to read itself"))
     p.add_argument("--at", default=None, help="comma-separated timestamps")

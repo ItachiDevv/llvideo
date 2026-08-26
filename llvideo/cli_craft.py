@@ -32,6 +32,58 @@ def _resolve_upload(prov, source: str, url: bool):
     return info["uri"]
 
 
+def analyse_craft(source: str, *, provider=None, model=None, zoom_fps: float = 8.0,
+                  max_windows: int = 8, no_zoom: bool = False,
+                  extra_prompt: str = "") -> tuple[dict, dict, list]:
+    """Shared two-pass craft analysis.
+
+    Anything that needs transition classification MUST come through here, not
+    through a single whole-video pass. A one-pass call at 1 fps reports a wipe
+    and a fade-to-black as `hard_cut` — measured. For an auditor comparing a
+    render against a spec, that is worse than useless: it invents mismatches.
+
+    Returns (craft_data, pacing_stats, candidates).
+    """
+    url = is_url(source)
+    pr = None if url else P.probe(source)
+    duration = pr.duration if pr else 0.0
+
+    cands, stats, hint = [], {}, ""
+    if pr and pr.has_video:
+        cands = C.find_candidates(C.frame_scores(source))
+        stats = C.shot_stats(cands, duration)
+        hint = C.describe_candidates(cands)
+
+    prov = provider or pick_provider(None, needs_upload=not url, needs_clipping=True)
+    uri = _resolve_upload(prov, source, url)
+
+    prompt = CRAFT_PROMPT + (("\n\n" + hint) if hint else "") + extra_prompt
+    overall = prov.analyse(source, prompt, CRAFT_SCHEMA, is_url=url,
+                           model=model, file_uri=uri)
+    data = dict(overall.data)
+
+    if cands and prov.name == "gemini" and not no_zoom:
+        detailed = []
+        for (a, b) in C.windows_for(cands, duration, limit=max_windows):
+            wp = (CRAFT_PROMPT
+                  + f"\n\nYou are seeing ONLY {a:.2f}s to {b:.2f}s, sampled at {zoom_fps} "
+                    f"frames per second so the transition is visible frame by frame.\n\n"
+                    "Report the transition here and its exact duration. Frames flowing "
+                    "into each other with motion blur and no content jump means CAMERA "
+                    "MOVEMENT, not an edit. Frames containing two images mixed together "
+                    "mean a blend, and you must give its duration.")
+            if not url:
+                wp += C.describe_luma(C.luma_profile(source, a, b))
+            r = prov.analyse(source, wp, CRAFT_SCHEMA, start=a, end=b, fps=zoom_fps,
+                             model=model, file_uri=uri)
+            for t in (r.data.get("transitions") or []):
+                t["_window"] = f"{a:.2f}-{b:.2f}"
+                detailed.append(t)
+        if detailed:
+            data["transitions"] = detailed
+    return data, stats, cands
+
+
 def run(args, out, fmt_ts) -> int:
     url = is_url(args.source)
     pr = None if url else P.probe(args.source)

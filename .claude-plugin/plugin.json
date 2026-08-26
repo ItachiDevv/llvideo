@@ -1,0 +1,11 @@
+{
+  "name": "llvideo",
+  "version": "0.2.0",
+  "description": "Give a coding agent real video understanding — analyse what happens, how it is cut, and QA your own renders before you ship them.",
+  "author": { "name": "ItachiDevv" },
+  "homepage": "https://github.com/ItachiDevv/llvideo",
+  "repository": "https://github.com/ItachiDevv/llvideo",
+  "license": "MIT",
+  "keywords": ["video", "analysis", "transitions", "editing", "qa", "render",
+               "remotion", "hyperframes", "gemini", "ffmpeg"]
+}

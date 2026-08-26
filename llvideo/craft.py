@@ -226,9 +226,11 @@ def luma_profile(src: str, start: float, end: float, samples: int = 24) -> dict:
     edges = [vals[0], vals[-1]]
     verdict = "no clear brightness event"
     # A dip well below BOTH endpoints means the picture passed through black.
-    if lo < 16 and lo < min(edges) * 0.45:
+    # Threshold is 20, not 0: limited-range video encodes black as luma 16, so
+    # a full-range threshold would never fire on a normal H.264 export.
+    if lo <= 20 and lo < min(edges) * 0.45:
         verdict = f"passes through BLACK at {lo_t}s (luma {lo}) - this is a fade through black, not a crossfade"
-    elif hi > 235 and hi > max(edges) * 1.4:
+    elif hi >= 232 and hi > max(edges) * 1.4:
         verdict = f"passes through WHITE at {hi_t}s (luma {hi}) - this is a fade through white"
     elif abs(vals[0] - vals[-1]) > 40:
         verdict = "brightness steps between the two shots without passing through black or white"

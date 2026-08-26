@@ -476,5 +476,118 @@ class TestCraftSchema(unittest.TestCase):
             self.assertIn(k, schema.TRANSITION_KINDS)
 
 
+class TestAuditThresholds(unittest.TestCase):
+    """The limited-range bug: black in an H.264 export is luma 16, not 0.
+
+    A threshold written for full range never fires on real footage, so this
+    check silently passed everything before it was fixed.
+    """
+
+    def test_black_threshold_covers_limited_range(self):
+        from llvideo import audit
+        self.assertGreater(audit.BLACK_LUMA, 16.0,
+                           "limited-range black is luma 16; a lower bound never fires")
+        self.assertLess(audit.BLACK_LUMA, 32.0, "too loose would flag dark footage")
+
+    def test_white_threshold_covers_limited_range(self):
+        from llvideo import audit
+        self.assertLessEqual(audit.WHITE_LUMA, 236.0)
+        self.assertGreater(audit.WHITE_LUMA, 200.0)
+
+    def test_severity_order_is_worst_first(self):
+        from llvideo import audit
+        self.assertEqual(audit.SEVERITIES[0], "blocker")
+        self.assertEqual(audit.SEVERITIES[-1], "note")
+
+
+class TestAuditVerdict(unittest.TestCase):
+    def _f(self, sev):
+        from llvideo.audit import Finding
+        return Finding(sev, "x", "msg")
+
+    def test_clean_when_empty(self):
+        from llvideo import audit
+        self.assertEqual(audit.summarise([])["verdict"], "clean")
+
+    def test_blocker_dominates(self):
+        from llvideo import audit
+        s = audit.summarise([self._f("minor"), self._f("blocker")])
+        self.assertEqual(s["verdict"], "fails")
+        self.assertEqual(s["worst"], "blocker")
+
+    def test_measured_and_judged_counted_separately(self):
+        from llvideo.audit import Finding, summarise
+        s = summarise([Finding("minor", "a", "m", source="measured"),
+                       Finding("minor", "b", "m", source="judged")])
+        self.assertEqual(s["measured_findings"], 1)
+        self.assertEqual(s["judged_findings"], 1)
+
+
+class TestIntentDiff(unittest.TestCase):
+    def _probe(self, duration=30.0, w=1920, h=1080, audio=True):
+        return probe.Probe(path="x", duration=duration, size_bytes=0,
+                           width=w, height=h, has_video=True, has_audio=audio)
+
+    def test_duration_mismatch_flagged(self):
+        from llvideo import audit
+        f = audit.compare_intent({"duration_seconds": 30}, self._probe(34.0), None)
+        self.assertTrue(any(x.check == "duration" for x in f))
+
+    def test_duration_within_tolerance_passes(self):
+        from llvideo import audit
+        f = audit.compare_intent({"duration_seconds": 30, "duration_tolerance": 1.0},
+                                 self._probe(30.4), None)
+        self.assertFalse(any(x.check == "duration" for x in f))
+
+    def test_aspect_mismatch_flagged(self):
+        from llvideo import audit
+        f = audit.compare_intent({"aspect": "9:16"}, self._probe(w=1920, h=1080), None)
+        self.assertTrue(any(x.check == "aspect" for x in f))
+
+    def test_matching_aspect_passes(self):
+        from llvideo import audit
+        f = audit.compare_intent({"aspect": "16:9"}, self._probe(w=1920, h=1080), None)
+        self.assertFalse(any(x.check == "aspect" for x in f))
+
+    def test_missing_transition_flagged(self):
+        from llvideo import audit
+        spec = {"transitions": [{"at": "00:04", "kind": "crossfade"}]}
+        f = audit.compare_intent(spec, self._probe(), {"transitions": []})
+        self.assertTrue(any(x.check == "transition_missing" for x in f))
+
+    def test_wrong_transition_kind_flagged(self):
+        from llvideo import audit
+        spec = {"transitions": [{"at": "00:04", "kind": "crossfade"}]}
+        got = {"transitions": [{"at": "00:04", "kind": "hard_cut"}]}
+        f = audit.compare_intent(spec, self._probe(), got)
+        self.assertTrue(any(x.check == "transition_kind" for x in f))
+
+    def test_correct_transition_passes(self):
+        from llvideo import audit
+        spec = {"transitions": [{"at": "00:04", "kind": "crossfade", "duration_seconds": 0.5}]}
+        got = {"transitions": [{"at": "00:04", "kind": "crossfade", "duration_seconds": 0.55}]}
+        f = audit.compare_intent(spec, self._probe(), got)
+        self.assertEqual([x for x in f if x.check.startswith("transition")], [])
+
+    def test_intent_findings_are_labelled_judged(self):
+        """Transition comparison rests on a model reading, not a measurement."""
+        from llvideo import audit
+        spec = {"transitions": [{"at": "00:04", "kind": "crossfade"}]}
+        f = audit.compare_intent(spec, self._probe(), {"transitions": []})
+        self.assertTrue(all(x.source == "judged" for x in f))
+
+    def test_music_required_but_absent(self):
+        from llvideo import audit
+        f = audit.compare_intent({"audio": {"must_have_music": True}},
+                                 self._probe(audio=False), None)
+        self.assertTrue(any(x.severity == "blocker" for x in f))
+
+    def test_bad_spec_file_raises_clearly(self):
+        from llvideo import audit
+        from llvideo.errors import LLVideoError
+        with self.assertRaises(LLVideoError):
+            audit.load_intent("definitely_not_a_real_spec.json")
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

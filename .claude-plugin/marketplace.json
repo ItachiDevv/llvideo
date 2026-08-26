@@ -1,0 +1,11 @@
+{
+  "name": "llvideo-local",
+  "owner": { "name": "ItachiDevv" },
+  "plugins": [
+    {
+      "name": "llvideo",
+      "source": "./",
+      "description": "Video understanding and render QA for coding agents."
+    }
+  ]
+}

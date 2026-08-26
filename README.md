@@ -16,6 +16,7 @@ Works with Claude Code, Codex, or any agent that can run a shell command.
 llvideo index recording.mp4
 llvideo ask clip.mp4 -q "what error message appears?"  --verify 3
 llvideo craft edit.mp4                       # transitions, camera moves, pacing
+llvideo audit out.mp4                        # QA your own render before shipping
 llvideo ask "https://youtube.com/watch?v=..." -q "when do they announce the price?"
 ```
 
@@ -84,6 +85,23 @@ measured, not estimated — `llvideo signals` is millisecond-exact and costs not
 
 ---
 
+## Auditing your own renders
+
+You just rendered a video you have never watched. `audit` checks it, free:
+
+```bash
+llvideo audit out.mp4
+llvideo audit out.mp4 --spec intent.json   # diff against what you asked for
+```
+
+Black or white first/last frame (the most common export bug), black gaps, freezes,
+EBU R128 loudness and true-peak clipping, silence, frame-rate mismatch, title-safe
+margins. No model, no tokens. Exit 1 on a blocker, so it drops into CI.
+
+Verified: catches 5 of 5 planted defects, and returns CLEAN with zero findings on real
+professional footage. Every finding is labelled **measured** (ffmpeg, with the number)
+or **judged** (a model's opinion).
+
 ## Analysing the edit, not the content
 
 `craft` answers "how is this cut" — transitions with exact durations, shot sizes,
@@ -140,6 +158,7 @@ code on screen, dashboard numbers. Each run costs about the same as the first.
 | `index` | ~$0.005/min | full structured timeline + contact sheet |
 | `ask -q` | ~$0.005/min | one question, answered with citations |
 | `craft` | ~$0.02/min | transitions, camera moves, shots, pacing, grade |
+| `audit` | **free** | render QA: black frames, loudness, dead air, spec diff |
 | `clip --start --end` | ~$0.003 | frame-exact deep dive on a window |
 | `providers` | free | which backends are usable |
 | `clean` | free | delete scratch files and uploads |
