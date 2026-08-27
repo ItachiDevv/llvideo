@@ -1,6 +1,6 @@
 {
   "name": "llvideo",
-  "version": "0.4.0",
+  "version": "0.5.0",
   "description": "Give a coding agent real video understanding \u2014 analyse what happens, how it is cut, generate short clips, and QA every render before you ship it.",
   "author": {
     "name": "ItachiDevv"

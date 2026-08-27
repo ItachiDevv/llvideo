@@ -17,9 +17,11 @@ The whole video also gets one pass for shots, pacing, colour and lighting.
 """
 from __future__ import annotations
 
+import json
 import re
 import statistics
 from dataclasses import dataclass, field
+from pathlib import Path
 
 from .errors import LLVideoError
 from .probe import Probe, _ffmpeg_filter_log
@@ -39,6 +41,15 @@ class Candidate:
                 "width": round(self.width, 3), "kind_hint": self.kind_hint}
 
 
+def _scores_cache_path(src: str):
+    """Cache key is content identity, not the path — a re-encode invalidates it."""
+    try:
+        from .analyze import UploadCache, scratch_dir
+        return scratch_dir() / f"scores_{UploadCache.fingerprint(src)}.json"
+    except Exception:
+        return None
+
+
 def frame_scores(src: str, max_frames: int = 200000) -> list[tuple[float, float]]:
     """Per-frame scene score for the whole video. Zero tokens, one decode pass.
 
@@ -50,6 +61,19 @@ def frame_scores(src: str, max_frames: int = 200000) -> list[tuple[float, float]
     """
     from .probe import run, _require
     _require("ffmpeg")
+
+    # This decodes every frame of the file, so it is the single most expensive
+    # local operation here. `craft` and `audit --craft` both want it for the
+    # same file, and a second question about the same video wants it again.
+    # Cache on content identity so it is paid for exactly once.
+    cache_path = _scores_cache_path(src)
+    if cache_path is not None and cache_path.exists():
+        try:
+            cached = json.loads(cache_path.read_text(encoding="utf-8"))
+            return [(float(t), float(v)) for t, v in cached]
+        except (OSError, ValueError, TypeError):
+            pass
+
     cp = run(["ffmpeg", "-hide_banner", "-nostdin", "-i", src,
               "-vf", r"select='gte(scene\,0)',metadata=print:file=-",
               "-f", "null", "-"], timeout=1800)
@@ -66,6 +90,13 @@ def frame_scores(src: str, max_frames: int = 200000) -> list[tuple[float, float]
             t = None
         if len(out) >= max_frames:
             break
+
+    if cache_path is not None and out:
+        try:
+            cache_path.parent.mkdir(parents=True, exist_ok=True)
+            cache_path.write_text(json.dumps(out), encoding="utf-8")
+        except OSError:
+            pass
     return out
 
 

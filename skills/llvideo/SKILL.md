@@ -86,6 +86,40 @@ Clipping is frame-exact and costs a few hundred tokens. Use it freely.
 
 ---
 
+## Repairing what you found — `fix`
+
+Most audit findings do not need anything regenerated. Wrong loudness, a clipped peak,
+a black frame on the head or tail — those are deterministic ffmpeg operations that
+cost nothing and cannot hallucinate.
+
+```bash
+llvideo audit render.mp4        # find it
+llvideo fix render.mp4          # repair it -> render_fixed.mp4
+```
+
+**Repaired automatically:** integrated loudness (two-pass `loudnorm` to −14 LUFS),
+true-peak clipping (held at −1.0 dBFS), and black or white first/last frames — trimmed
+by measuring where the black actually ends, not by assuming a frame count.
+
+**Deliberately NOT repaired**, each with a stated reason:
+
+| finding | why not |
+|---|---|
+| black gap mid-timeline | an editing decision, not a defect to silently delete |
+| freeze | a held frame may be intentional — shorten it in the timeline |
+| low resolution | upscaling invents detail that was never captured |
+| safe margin | layout is a composition choice; move the element, do not crop |
+| duration / aspect | set at render time; trimming to fit would cut content |
+
+`fix` **re-audits afterwards and reports before/after counts**, because claiming a
+repair worked without re-measuring is the habit this tool exists to break. Measured on
+a deliberately broken render: 5 major + 1 minor became 1 major + 1 minor, and the two
+left standing were the two that need a human decision.
+
+It never overwrites the source. Output goes to `<name>_fixed.mp4` unless you pass `--out`.
+
+---
+
 ## Generating supplemental clips — `gen`
 
 Short clips that slot into a timeline built elsewhere: an establishing shot, b-roll,
@@ -430,6 +464,7 @@ file. Use llvideo on the **rendered output**; use hyperframes on the **live comp
 | `spec` | **free** | extract intent from a HyperFrames / brag / Remotion project |
 | `gen` | ~$0.07/s | generate a 1-15s supplemental clip (Grok Imagine), auto-audited |
 | `gen-image` | ~$0.02 | generate a still — title card, texture, image-to-video seed |
+| `fix` | **free** | repair loudness, clipping and black edge frames, then re-verify |
 | `clip --start --end` | ~$0.003 | frame-exact deep dive on a window |
 | `providers` | free | which backends are usable |
 | `clean` | free | delete scratch files and uploads |

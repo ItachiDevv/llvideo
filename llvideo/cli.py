@@ -300,6 +300,12 @@ def cmd_genimage(args) -> int:
     return cli_gen.run_image(args, _out, _fmt_ts)
 
 
+def cmd_fix(args) -> int:
+    """Repair audit findings that ffmpeg can fix deterministically."""
+    from . import cli_fix
+    return cli_fix.run(args, _out, _fmt_ts)
+
+
 def cmd_sheet(args) -> int:
     """T4 — build a contact sheet for the agent to read with its own eyes."""
     pr = P.probe(args.source)
@@ -543,6 +549,17 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--reference", default=None,
                    help="reference image, for style or character consistency")
     p.set_defaults(func=cmd_genimage)
+
+    p = common(sub.add_parser("fix",
+        help="repair what ffmpeg can - loudness, clipping, black edge frames"))
+    p.add_argument("--out", default=None, help="output path (default: <name>_fixed.mp4)")
+    p.add_argument("--no-audio-fix", action="store_true",
+                   help="leave loudness alone")
+    p.add_argument("--no-trim", action="store_true",
+                   help="leave black edge frames in place")
+    p.add_argument("--no-verify", action="store_true",
+                   help="skip the re-audit that proves the repair worked")
+    p.set_defaults(func=cmd_fix)
 
     p = common(sub.add_parser("sheet", help="contact sheet for the agent to read itself"))
     p.add_argument("--at", default=None, help="comma-separated timestamps")

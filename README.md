@@ -18,6 +18,7 @@ llvideo ask clip.mp4 -q "what error message appears?"  --verify 3
 llvideo craft edit.mp4                       # transitions, camera moves, pacing
 llvideo audit out.mp4                        # QA your own render before shipping
 llvideo audit out.mp4 --from-project ./proj  # diff it against what the project meant
+llvideo fix out.mp4                          # repair loudness + black edge frames, free
 llvideo ask "https://youtube.com/watch?v=..." -q "when do they announce the price?"
 ```
 
@@ -181,6 +182,7 @@ code on screen, dashboard numbers. Each run costs about the same as the first.
 | `spec` | **free** | extract intent from a HyperFrames / brag / Remotion project |
 | `gen` | ~$0.07/s | generate a 1-15s supplemental clip (Grok Imagine), auto-audited |
 | `gen-image` | ~$0.02 | generate a still — title card, texture, image-to-video seed |
+| `fix` | **free** | repair loudness, clipping and black edge frames, then re-verify |
 | `clip --start --end` | ~$0.003 | frame-exact deep dive on a window |
 | `providers` | free | which backends are usable |
 | `clean` | free | delete scratch files and uploads |

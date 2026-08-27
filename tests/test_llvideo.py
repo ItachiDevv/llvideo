@@ -834,5 +834,128 @@ class TestSinglePassDetectors(unittest.TestCase):
         self.assertLessEqual(len(prof["points"]), 12)
 
 
+class TestFixPolicy(unittest.TestCase):
+    """What gets repaired and what deliberately does not."""
+
+    def test_only_deterministic_repairs_are_attempted(self):
+        from llvideo import fix as FX
+        self.assertEqual(FX.REPAIRABLE, {"loudness", "clipping", "edge_frame"})
+
+    def test_editorial_findings_are_never_silently_changed(self):
+        """Removing a mid-timeline black gap would be editing, not repairing."""
+        from llvideo import fix as FX
+        for check in ("black_gap", "freeze", "resolution", "safe_margin", "duration"):
+            self.assertNotIn(check, FX.REPAIRABLE)
+            self.assertTrue(FX._why_skipped(check),
+                            f"{check} must explain why it is not fixed")
+
+    def test_targets_are_platform_standard(self):
+        from llvideo import fix as FX
+        self.assertEqual(FX.TARGET_LUFS, -14.0)
+        self.assertEqual(FX.TARGET_TRUE_PEAK, -1.0)
+
+    def test_default_output_does_not_overwrite_the_source(self):
+        from llvideo.fix import _default_out
+        self.assertNotEqual(_default_out("a/b/clip.mp4"), "a/b/clip.mp4")
+        self.assertIn("_fixed", _default_out("a/b/clip.mp4"))
+
+
+@unittest.skipUnless(HAVE_FFMPEG, "ffmpeg not installed")
+class TestFixEndToEnd(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.dir = Path(tempfile.mkdtemp(prefix="llvideo_fix_"))
+        cls.quiet = cls.dir / "quiet.mp4"
+        # black head, content, black tail, with very quiet audio
+        _run(["ffmpeg", "-hide_banner", "-loglevel", "error", "-y",
+              "-f", "lavfi", "-i", "color=c=black:s=320x240:d=0.2",
+              "-f", "lavfi", "-i", "testsrc2=s=320x240:r=25:d=4",
+              "-f", "lavfi", "-i", "color=c=black:s=320x240:d=0.2",
+              "-f", "lavfi", "-i", "sine=frequency=440:duration=4.4",
+              "-filter_complex",
+              "[0:v][1:v][2:v]concat=n=3:v=1:a=0,fps=25[v];[3:a]volume=0.01[a]",
+              "-map", "[v]", "-map", "[a]", "-pix_fmt", "yuv420p",
+              "-c:a", "aac", "-shortest", str(cls.quiet)])
+
+    @classmethod
+    def tearDownClass(cls):
+        shutil.rmtree(cls.dir, ignore_errors=True)
+
+    def test_repairs_loudness_and_edges_and_proves_it(self):
+        from llvideo import audit as A, fix as FX
+        out = self.dir / "fixed.mp4"
+        r = FX.fix(str(self.quiet), str(out))
+        self.assertTrue(out.exists())
+        self.assertTrue(r.changed)
+        # The re-audit must show real improvement, not a claim of one.
+        self.assertLess(r.after["counts"]["major"], r.before["counts"]["major"],
+                        "the repair must reduce major findings, verified by re-measuring")
+
+    def test_edge_frames_actually_removed(self):
+        from llvideo import audit as A, fix as FX
+        out = self.dir / "fixed2.mp4"
+        FX.fix(str(self.quiet), str(out))
+        after = A.check_edges(probe.probe(str(out)))
+        self.assertEqual([f for f in after if f.check == "edge_frame"], [],
+                         "black edge frames should be gone after the trim")
+
+    def test_loudness_lands_on_target(self):
+        from llvideo import fix as FX
+        out = self.dir / "fixed3.mp4"
+        FX.fix(str(self.quiet), str(out))
+        stats = FX.measure_loudness(str(out))
+        if stats.get("input_i"):
+            self.assertAlmostEqual(float(stats["input_i"]), FX.TARGET_LUFS, delta=1.5)
+
+    def test_clean_file_is_left_alone(self):
+        """Nothing repairable means no output file and no claim of a change."""
+        from llvideo import fix as FX
+        clean = self.dir / "clean.mp4"
+        _run(["ffmpeg", "-hide_banner", "-loglevel", "error", "-y",
+              "-f", "lavfi", "-i", "testsrc2=s=320x240:r=25:d=3",
+              "-f", "lavfi", "-i", "sine=frequency=440:duration=3",
+              "-af", "volume=0.35", "-pix_fmt", "yuv420p",
+              "-c:a", "aac", "-shortest", str(clean)])
+        r = FX.fix(str(clean), str(self.dir / "noop.mp4"),
+                   normalise_audio=False, trim_edges=False)
+        self.assertFalse(r.changed)
+        self.assertIsNone(r.output)
+
+
+@unittest.skipUnless(HAVE_FFMPEG, "ffmpeg not installed")
+class TestPerformanceFixes(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        Fixtures.build()
+
+    @classmethod
+    def tearDownClass(cls):
+        Fixtures.teardown()
+
+    def test_parallel_frame_grabs_match_serial(self):
+        times = [0.5, 2.0, 5.0, 9.0]
+        serial = frames.frames_at(str(Fixtures.three_scene), times, width=160, workers=1)
+        par = frames.frames_at(str(Fixtures.three_scene), times, width=160)
+        self.assertEqual(serial, par, "parallelism must not change the output")
+
+    def test_frames_at_empty_input(self):
+        self.assertEqual(frames.frames_at(str(Fixtures.three_scene), []), [])
+
+    def test_frame_scores_cache_returns_identical_data(self):
+        first = craft_mod.frame_scores(str(Fixtures.three_scene))
+        second = craft_mod.frame_scores(str(Fixtures.three_scene))
+        self.assertEqual(first, second)
+        self.assertTrue(first, "scores should not be empty")
+
+    def test_cache_key_is_content_not_path(self):
+        """A re-encode must invalidate the cache, so the key hashes content."""
+        import shutil as _sh
+        copy = Fixtures.dir / "copy_of_three.mp4"
+        _sh.copyfile(Fixtures.three_scene, copy)
+        a = craft_mod._scores_cache_path(str(Fixtures.three_scene))
+        b = craft_mod._scores_cache_path(str(copy))
+        self.assertEqual(a.name, b.name, "identical bytes should share a cache entry")
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
