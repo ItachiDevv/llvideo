@@ -69,7 +69,15 @@ class UploadCache:
 
     @staticmethod
     def fingerprint(path: str) -> str:
-        """Cheap content identity: size + mtime + head/tail bytes."""
+        """Cheap content identity: size + mtime + head/tail bytes.
+
+        Deliberately NOT a full content hash — hashing a 6 GB file to decide
+        whether to reuse a cached answer defeats the point. mtime is included
+        on purpose: without it, two videos with the same size and the same head
+        and tail bytes but different middles would collide, and one file would
+        be served the other's cached result. The cost is that a copy of a file
+        gets its own entry. A redundant decode is cheap; a wrong answer is not.
+        """
         p = Path(path)
         st = p.stat()
         h = hashlib.sha256()

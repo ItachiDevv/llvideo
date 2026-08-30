@@ -947,14 +947,41 @@ class TestPerformanceFixes(unittest.TestCase):
         self.assertEqual(first, second)
         self.assertTrue(first, "scores should not be empty")
 
-    def test_cache_key_is_content_not_path(self):
-        """A re-encode must invalidate the cache, so the key hashes content."""
+    def test_cache_key_includes_mtime_deliberately(self):
+        """The key is size + mtime + head/tail bytes, NOT a full content hash.
+
+        That means a copy gets its own entry, which costs one redundant decode.
+        The alternative — dropping mtime — would let two videos with the same
+        size and the same head and tail bytes but different middles collide,
+        serving one file's scene scores for another. A wasted decode is cheap;
+        a wrong answer is not.
+        """
         import shutil as _sh
         copy = Fixtures.dir / "copy_of_three.mp4"
         _sh.copyfile(Fixtures.three_scene, copy)
         a = craft_mod._scores_cache_path(str(Fixtures.three_scene))
         b = craft_mod._scores_cache_path(str(copy))
-        self.assertEqual(a.name, b.name, "identical bytes should share a cache entry")
+        self.assertNotEqual(a.name, b.name)
+
+    def test_cache_key_is_stable_for_the_same_file(self):
+        """The same untouched file must hit its own entry every time."""
+        a = craft_mod._scores_cache_path(str(Fixtures.three_scene))
+        b = craft_mod._scores_cache_path(str(Fixtures.three_scene))
+        self.assertEqual(a.name, b.name)
+
+    def test_rewriting_a_file_invalidates_its_entry(self):
+        """A re-encode must never be served the old file's scores."""
+        import time as _t
+        target = Fixtures.dir / "mutable.mp4"
+        _run(["ffmpeg", "-hide_banner", "-loglevel", "error", "-y",
+              "-f", "lavfi", "-i", "color=c=red:s=160x120:d=1",
+              "-pix_fmt", "yuv420p", str(target)])
+        before = craft_mod._scores_cache_path(str(target)).name
+        _t.sleep(1.1)  # filesystem mtime resolution
+        _run(["ffmpeg", "-hide_banner", "-loglevel", "error", "-y",
+              "-f", "lavfi", "-i", "color=c=blue:s=160x120:d=1",
+              "-pix_fmt", "yuv420p", str(target)])
+        self.assertNotEqual(before, craft_mod._scores_cache_path(str(target)).name)
 
 
 class TestTimelineFusion(unittest.TestCase):
