@@ -957,5 +957,140 @@ class TestPerformanceFixes(unittest.TestCase):
         self.assertEqual(a.name, b.name, "identical bytes should share a cache entry")
 
 
+class TestTimelineFusion(unittest.TestCase):
+    """Co-occurrence is the context: what was said WHILE this was on screen."""
+
+    INDEX = {
+        "summary": "s",
+        "scenes": [
+            {"start": "00:00", "end": "00:04", "description": "wide of a desk",
+             "camera": "wide, static",
+             "on_screen_text": [{"text": "Step 1", "legibility": "clear", "where": "title"}],
+             "actions": ["opens laptop"]},
+            {"start": "00:04", "end": "00:10", "description": "close on the screen",
+             "camera": "close-up",
+             "on_screen_text": [{"text": "", "legibility": "illegible",
+                                 "where": "status bar"}],
+             "actions": []},
+        ],
+        "speech": [
+            {"start": "00:01", "end": "00:03", "text": "First you open it."},
+            {"start": "00:05", "end": "00:08", "text": "Then it loads instantly."},
+        ],
+        "audio_events": [{"start": "00:00", "end": "00:10", "description": "soft music"}],
+        "key_moments": [{"timestamp": "00:05", "why": "the load happens"}],
+    }
+
+    def test_speech_lands_on_the_scene_it_was_said_over(self):
+        from llvideo import timeline as T
+        beats = T.build(self.INDEX, duration=10.0)
+        self.assertEqual(len(beats), 2)
+        self.assertIn("First you open it", beats[0].spoken)
+        self.assertIn("loads instantly", beats[1].spoken)
+
+    def test_speech_straddling_a_cut_goes_to_the_bigger_overlap(self):
+        """Picking the first overlap would bias every straddling line earlier."""
+        from llvideo import timeline as T
+        idx = dict(self.INDEX)
+        idx["speech"] = [{"start": "00:03.5", "end": "00:07", "text": "straddles"}]
+        beats = T.build(idx, duration=10.0)
+        self.assertEqual(beats[0].spoken, "")
+        self.assertIn("straddles", beats[1].spoken)
+
+    def test_illegible_text_kept_separate_from_read_text(self):
+        from llvideo import timeline as T
+        beats = T.build(self.INDEX, duration=10.0)
+        self.assertEqual(beats[0].on_screen_text, ["Step 1"])
+        self.assertEqual(beats[1].on_screen_text, [])
+        self.assertTrue(beats[1].illegible_text)
+
+    def test_key_moment_marks_the_containing_beat(self):
+        from llvideo import timeline as T
+        beats = T.build(self.INDEX, duration=10.0)
+        self.assertFalse(beats[0].is_key_moment)
+        self.assertTrue(beats[1].is_key_moment)
+
+    def test_local_transcript_overrides_model_speech(self):
+        """The model's audio timestamps drift ~1s; a real transcript does not."""
+        from llvideo import timeline as T
+        tr = {"segments": [{"start": 4.5, "end": 6.0, "text": "from the transcript"}]}
+        beats = T.build(self.INDEX, duration=10.0, transcript=tr)
+        joined = " ".join(b.spoken for b in beats)
+        self.assertIn("from the transcript", joined)
+        self.assertNotIn("First you open it", joined)
+
+    def test_coverage_reports_gaps(self):
+        from llvideo import timeline as T
+        idx = {"scenes": [{"start": "00:00", "end": "00:03", "description": "a"},
+                          {"start": "00:08", "end": "00:10", "description": "b"}]}
+        cov = T.coverage(T.build(idx, duration=10.0), 10.0)
+        self.assertTrue(cov["gaps"], "a hole in the timeline must be reported")
+        self.assertLess(cov["ratio"], 1.0)
+
+    def test_coverage_always_has_every_key(self):
+        """A URL has no local probe, so duration is 0 — the caller still needs
+        every field. An early return with a partial dict crashed it once."""
+        from llvideo import timeline as T
+        beats = T.build(self.INDEX, duration=0.0)
+        for d in (0.0, 10.0):
+            cov = T.coverage(beats, d)
+            for k in ("covered_seconds", "duration", "ratio", "gaps",
+                      "with_speech", "with_text", "beats", "duration_known"):
+                self.assertIn(k, cov)
+
+    def test_empty_index_does_not_crash(self):
+        from llvideo import timeline as T
+        self.assertEqual(T.build({}, duration=0.0), [])
+        self.assertEqual(T.coverage([], 0.0)["beats"], 0)
+
+    def test_render_is_one_chronological_block(self):
+        from llvideo import timeline as T
+        text = T.render(T.build(self.INDEX, duration=10.0))
+        self.assertIn("says", text)
+        self.assertIn("Step 1", text)
+        self.assertLess(text.index("00:00"), text.index("00:04"))
+
+
+class TestIndexCache(unittest.TestCase):
+    def setUp(self):
+        self.dir = Path(tempfile.mkdtemp(prefix="llvideo_idx_"))
+
+    def tearDown(self):
+        shutil.rmtree(self.dir, ignore_errors=True)
+
+    def _cache(self):
+        from llvideo.analyze import IndexCache
+        return IndexCache(self.dir / "indexes.json")
+
+    def test_roundtrip(self):
+        c = self._cache()
+        c.put("k", {"summary": "hello"})
+        self.assertEqual(self._cache().get("k"), {"summary": "hello"})
+
+    def test_miss_returns_none(self):
+        self.assertIsNone(self._cache().get("nope"))
+
+    def test_key_separates_sampling_settings(self):
+        """A 0.2fps run must not be served to a full-rate request."""
+        from llvideo.analyze import IndexCache
+        a = IndexCache.key("http://x/v", 1.0, True, None)
+        b = IndexCache.key("http://x/v", 0.2, True, None)
+        c = IndexCache.key("http://x/v", 1.0, False, None)
+        self.assertNotEqual(a, b)
+        self.assertNotEqual(a, c)
+
+    def test_expired_entry_is_dropped(self):
+        import time as _t
+        from llvideo.analyze import IndexCache
+        c = self._cache()
+        c.data["old"] = {"index": {"x": 1}, "at": _t.time() - IndexCache.TTL_SECONDS - 10}
+        c.save()
+        self.assertIsNone(self._cache().get("old"))
+
+    def test_corrupt_file_does_not_crash(self):
+        (self.dir / "indexes.json").write_text("{not json", encoding="utf-8")
+        self.assertIsNone(self._cache().get("k"))
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

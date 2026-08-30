@@ -145,7 +145,8 @@ def cmd_index(args) -> int:
         a = analyse(args.source, provider_name=args.provider, model=args.model,
                     fps=args.fps, want_audio=(False if args.no_audio else None),
                     sheet_path=args.sheet, deep_signals=args.deep and i == 0,
-                    approved=args.yes)
+                    approved=args.yes,
+                    use_cache=not args.no_cache and args.verify <= 1)
         runs.append(a.index)
     payload = a.to_dict()
     if len(runs) > 1:
@@ -304,6 +305,12 @@ def cmd_fix(args) -> int:
     """Repair audit findings that ffmpeg can fix deterministically."""
     from . import cli_fix
     return cli_fix.run(args, _out, _fmt_ts)
+
+
+def cmd_timeline(args) -> int:
+    """One fused chronological track: what is on screen and what is said over it."""
+    from . import cli_timeline
+    return cli_timeline.run(args, _out, _fmt_ts)
 
 
 def cmd_sheet(args) -> int:
@@ -469,6 +476,8 @@ def build_parser() -> argparse.ArgumentParser:
 
     p = modelargs(common(sub.add_parser("index", help="full structured index of the video")))
     p.add_argument("--deep", action="store_true", help="also run black/freeze/silence detection")
+    p.add_argument("--no-cache", action="store_true",
+                   help="force a fresh analysis instead of reusing a cached index")
     p.set_defaults(func=cmd_index)
 
     p = modelargs(common(sub.add_parser("ask", help="ask one question about the video")))
@@ -560,6 +569,17 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--no-verify", action="store_true",
                    help="skip the re-audit that proves the repair worked")
     p.set_defaults(func=cmd_fix)
+
+    p = modelargs(common(sub.add_parser("timeline",
+        help="one chronological track - visuals with the speech said over them")))
+    p.add_argument("--transcribe", action="store_true",
+                   help="use a local word-level transcript instead of the model's "
+                        "speech, whose timings drift about a second")
+    p.add_argument("--backend", choices=["auto", "local", "groq"], default="local",
+                   help="transcription backend when --transcribe is used")
+    p.add_argument("--no-cache", action="store_true",
+                   help="force a fresh analysis instead of reusing a cached index")
+    p.set_defaults(func=cmd_timeline)
 
     p = common(sub.add_parser("sheet", help="contact sheet for the agent to read itself"))
     p.add_argument("--at", default=None, help="comma-separated timestamps")

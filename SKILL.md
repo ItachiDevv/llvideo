@@ -86,6 +86,51 @@ Clipping is frame-exact and costs a few hundred tokens. Use it freely.
 
 ---
 
+## The best view for understanding — `timeline`
+
+```bash
+llvideo timeline VIDEO
+llvideo timeline VIDEO --transcribe    # word-exact speech timing
+```
+
+`index` returns `scenes`, `speech` and `audio_events` as three separate arrays. Each
+is accurate, but nothing connects them — so "a close-up of the dashboard" and "he says
+the range is wrong" sit in different lists, and the fact that they happen at the same
+moment is left for you to reconstruct.
+
+**That co-occurrence is the context.** A shot means something different depending on
+what is being said over it. `timeline` interleaves everything onto one track:
+
+```
+00:10-00:18  (8.0s)   *KEY*
+    shot   close-up facing driver
+    see    Camera returns to the driver as a lit gas station glides past the window
+    does   The vehicle drives past the illuminated canopy
+    says   "The gas station appears at nine seconds into the clip."
+    hear   Low interior car ambient hum
+    why    The gas station canopy passes directly behind the driver
+```
+
+Use this over `index` whenever the question is about meaning rather than inventory.
+
+**`--transcribe` fuses a local word-level transcript** instead of the model's speech.
+The model's audio timestamps drift about a second, which is enough to attach a line to
+the wrong shot at a fast cut. Speech is assigned to the beat it overlaps *most*, not
+the first one it touches, so a line straddling a cut lands where it was mostly spoken.
+
+It reports **coverage** and names any stretch of runtime nothing was said about. A
+timeline with holes missed something, and saying so beats presenting a partial account
+as complete.
+
+### Follow-up questions are free
+
+The index is cached for 48 hours against content identity and sampling settings.
+Measured: a second `timeline` on the same video went from **12.5s and $0.02 to 0.4s and
+nothing**. Ask as many questions as you need — iterating is how understanding is built,
+and it should not cost anything after the first pass. `--no-cache` forces a fresh run.
+
+---
+
 ## Repairing what you found — `fix`
 
 Most audit findings do not need anything regenerated. Wrong loudness, a clipped peak,
@@ -458,6 +503,7 @@ file. Use llvideo on the **rendered output**; use hyperframes on the **live comp
 | `stills` | free | full-resolution frames at timestamps |
 | `transcribe` | free | local word-level transcript |
 | `index` | ~$0.005/min | full structured timeline + contact sheet |
+| `timeline` | ~$0.005/min | **one fused track** — visuals with the speech said over them |
 | `ask -q` | ~$0.005/min | one question, answered with citations |
 | `craft` | ~$0.02/min | transitions, camera moves, shots, pacing, grade |
 | `audit` | **free** | render QA: black frames, loudness, dead air, spec diff |

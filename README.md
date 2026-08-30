@@ -13,6 +13,7 @@ frames to look at with its own eyes.
 Works with Claude Code, Codex, or any agent that can run a shell command.
 
 ```bash
+llvideo timeline recording.mp4               # visuals fused with what is said over them
 llvideo index recording.mp4
 llvideo ask clip.mp4 -q "what error message appears?"  --verify 3
 llvideo craft edit.mp4                       # transitions, camera moves, pacing
@@ -176,6 +177,7 @@ code on screen, dashboard numbers. Each run costs about the same as the first.
 | `stills` | free | full-resolution frames at timestamps |
 | `transcribe` | free | local word-level transcript, CPU only |
 | `index` | ~$0.005/min | full structured timeline + contact sheet |
+| `timeline` | ~$0.005/min | **one fused track** — visuals with the speech said over them |
 | `ask -q` | ~$0.005/min | one question, answered with citations |
 | `craft` | ~$0.02/min | transitions, camera moves, shots, pacing, grade |
 | `audit` | **free** | render QA: black frames, loudness, dead air, spec diff |

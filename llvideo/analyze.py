@@ -106,6 +106,62 @@ class UploadCache:
             pass
 
 
+class IndexCache:
+    """Remember a completed index so follow-up questions are free.
+
+    Every `ask` used to re-run the whole analysis: upload check, structured
+    call, contact sheet. Asking a second question about the same video paid
+    the full price again, which discourages exactly the back-and-forth that
+    actually builds understanding.
+
+    Keyed on (content fingerprint, sampling settings) so a different fps or an
+    audio-stripped run does not collide with a full one. Bounded to 48h to
+    match the provider-side file lifetime.
+    """
+
+    TTL_SECONDS = 47 * 3600
+
+    def __init__(self, path: Path | None = None):
+        self.path = path or (scratch_dir() / "indexes.json")
+        self.data: dict = {}
+        if self.path.exists():
+            try:
+                self.data = json.loads(self.path.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError):
+                self.data = {}
+
+    @staticmethod
+    def key(source: str, fps_ratio: float, keep_audio: bool, model: str | None) -> str:
+        if is_url(source):
+            base = hashlib.sha256(source.encode()).hexdigest()[:24]
+        else:
+            try:
+                base = UploadCache.fingerprint(source)
+            except OSError:
+                base = hashlib.sha256(source.encode()).hexdigest()[:24]
+        return f"{base}:{fps_ratio}:{int(keep_audio)}:{model or 'default'}"
+
+    def get(self, key: str) -> dict | None:
+        e = self.data.get(key)
+        if not e:
+            return None
+        if time.time() - e.get("at", 0) > self.TTL_SECONDS:
+            self.data.pop(key, None)
+            self.save()
+            return None
+        return e.get("index")
+
+    def put(self, key: str, index: dict) -> None:
+        self.data[key] = {"index": index, "at": time.time()}
+        self.save()
+
+    def save(self) -> None:
+        try:
+            self.path.write_text(json.dumps(self.data, indent=2), encoding="utf-8")
+        except OSError:
+            pass
+
+
 # ---------------------------------------------------------------------------
 
 @dataclass
@@ -279,7 +335,7 @@ def analyse(source: str, *, provider_name: str | None = None, model: str | None 
             fps: float | None = None, want_audio: bool | None = None,
             question: str | None = None, sheet_path: str | None = None,
             deep_signals: bool = False, keep_upload: bool = True,
-            approved: bool = False) -> Analysis:
+            approved: bool = False, use_cache: bool = True) -> Analysis:
     """Run the full pipeline: plan, T0, upload, structured index, contact sheet."""
     pl = plan(source, provider_name=provider_name, fps=fps,
               want_audio=want_audio, model=model)
@@ -322,6 +378,34 @@ def analyse(source: str, *, provider_name: str | None = None, model: str | None 
 
         prompt = (ANSWER_PROMPT + question) if question else INDEX_PROMPT
         schema = ANSWER_SCHEMA if question else VIDEO_INDEX_SCHEMA
+
+        # A plain index is deterministic enough to reuse; a question is not,
+        # so only the index path is cached.
+        index_key = None
+        if question is None and use_cache:
+            idx_cache = IndexCache()
+            index_key = IndexCache.key(source, pl.fps_ratio, pl.keep_audio, model)
+            hit = idx_cache.get(index_key)
+            if hit is not None:
+                signals["index"] = "reused cached index"
+                look = index_frame_times(hit, pl.probe.duration if pl.probe else 0.0)
+                sheet = None
+                if not pl.is_url and pl.probe and pl.probe.has_video:
+                    times = look or P.select_frame_times(
+                        pl.probe.duration, signals.get("scene_cuts"))
+                    target = sheet_path or str(
+                        work / f"sheet_{UploadCache.fingerprint(source)}.jpg")
+                    tile = 768 if pl.probe.is_screen_content else 360
+                    if pl.probe.is_screen_content and len(times) > 6:
+                        step = len(times) / 6
+                        times = [times[int(i * step)] for i in range(6)]
+                    try:
+                        sheet = F.contact_sheet(upload_src, times, target, tile_width=tile)
+                    except LLVideoError:
+                        sheet = None
+                return Analysis(index=hit, plan=pl, usage=Usage(), provider="cache",
+                                model=model or "", sheet=sheet, signals=signals,
+                                look_at=look)
 
         file_uri = None
         cache_key = None
@@ -397,6 +481,9 @@ def analyse(source: str, *, provider_name: str | None = None, model: str | None 
                 sheet = F.contact_sheet(upload_src, times, target, tile_width=tile)
             except LLVideoError:
                 sheet = None
+
+        if index_key is not None:
+            IndexCache().put(index_key, result.data)
 
         return Analysis(index=result.data, plan=pl, usage=result.usage,
                         provider=result.provider, model=result.model,
