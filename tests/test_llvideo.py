@@ -947,20 +947,10 @@ class TestPerformanceFixes(unittest.TestCase):
         self.assertEqual(first, second)
         self.assertTrue(first, "scores should not be empty")
 
-    def test_cache_key_includes_mtime_deliberately(self):
-        """The key is size + mtime + head/tail bytes, NOT a full content hash.
-
-        That means a copy gets its own entry, which costs one redundant decode.
-        The alternative — dropping mtime — would let two videos with the same
-        size and the same head and tail bytes but different middles collide,
-        serving one file's scene scores for another. A wasted decode is cheap;
-        a wrong answer is not.
-        """
-        import shutil as _sh
-        copy = Fixtures.dir / "copy_of_three.mp4"
-        _sh.copyfile(Fixtures.three_scene, copy)
+    def test_different_files_get_different_keys(self):
+        """Two genuinely different videos must never share an entry."""
         a = craft_mod._scores_cache_path(str(Fixtures.three_scene))
-        b = craft_mod._scores_cache_path(str(copy))
+        b = craft_mod._scores_cache_path(str(Fixtures.black_gap))
         self.assertNotEqual(a.name, b.name)
 
     def test_cache_key_is_stable_for_the_same_file(self):

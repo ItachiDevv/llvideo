@@ -75,8 +75,12 @@ class UploadCache:
         whether to reuse a cached answer defeats the point. mtime is included
         on purpose: without it, two videos with the same size and the same head
         and tail bytes but different middles would collide, and one file would
-        be served the other's cached result. The cost is that a copy of a file
-        gets its own entry. A redundant decode is cheap; a wrong answer is not.
+        be served the other's cached result.
+
+        Known limit: mtime is truncated to whole seconds, so a copy made in the
+        same second as its original shares a key. That is harmless — the bytes
+        are identical — but it means the key is NOT a stable function of content
+        alone, and no test should assert either outcome for a fresh copy.
         """
         p = Path(path)
         st = p.stat()
