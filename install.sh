@@ -13,9 +13,15 @@ deploy() {
   local dest="$1" doc="$2" name="$3"
   mkdir -p "$dest"
   cp "$HERE/$doc" "$dest/$doc"
-  [ -d "$HERE/references" ] && cp -r "$HERE/references" "$dest/" 2>/dev/null || true
+  # only copy references/ when it actually has content
+  if [ -d "$HERE/references" ] && [ -n "$(ls -A "$HERE/references" 2>/dev/null)" ]; then
+    cp -r "$HERE/references" "$dest/"
+  fi
   echo "    $name -> $dest"
 }
+
+echo "==> regenerating AGENTS.md from SKILL.md"
+python "$HERE/scripts/make_agents.py"
 
 echo "==> deploying agent wrappers"
 deploy "$HOME/.claude/skills/llvideo"  "SKILL.md"  "Claude Code"
