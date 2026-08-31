@@ -10,7 +10,7 @@ Watch and understand a video file or YouTube link.
 ```
 
 Examples:
-- `/llvideo C:\Users\newma\Videos\clip.mp4`
+- `/llvideo C:\path\to\clip.mp4`
 - `/llvideo clip.mp4 what error message appears?`
 - `/llvideo https://youtube.com/watch?v=abc123 when do they show the price?`
 
@@ -66,7 +66,7 @@ llvideo index "<path>"
 
 ## If it fails
 
-- `llvideo: command not found` → `pip install -e C:\Users\newma\Desktop\llvideo`
+- `llvideo: command not found` → `pip install -e <the llvideo repo directory>`
 - No API key → `llvideo providers` shows what is configured. Needs `GEMINI_API_KEY`
-  or `OPENROUTER_API_KEY` in the environment or `~/.itachi-api-keys`.
+  or `OPENROUTER_API_KEY` in the environment or `~/.itachi-api-keys` (a personal key file this setup uses; the environment works too).
 - `ffmpeg not found` → `winget install Gyan.FFmpeg`

@@ -15,7 +15,16 @@ from pathlib import Path
 
 from ..errors import ProviderError
 
-KEYFILE = Path.home() / ".itachi-api-keys"
+# Optional convenience fallback: a KEY=value file, so keys can live outside the
+# shell profile. Resolved at call time, not import time — a module-level
+# Path.home() is captured once and ignores any later HOME change, which made a
+# no-key environment still read the developer's real key file and report
+# providers as available when they were not.
+KEYFILE_NAME = ".itachi-api-keys"
+
+
+def _keyfile() -> Path:
+    return Path.home() / KEYFILE_NAME
 
 
 def read_key(*names: str) -> str | None:
@@ -24,9 +33,10 @@ def read_key(*names: str) -> str | None:
         v = os.environ.get(n)
         if v and v.strip():
             return v.strip()
-    if KEYFILE.exists():
+    kf = _keyfile()
+    if kf.exists():
         try:
-            for line in KEYFILE.read_text(encoding="utf-8", errors="ignore").splitlines():
+            for line in kf.read_text(encoding="utf-8", errors="ignore").splitlines():
                 line = line.strip()
                 for n in names:
                     if line.startswith(f"{n}="):

@@ -10,4 +10,11 @@ header = (
     "Install: `pip install -e .` then `llvideo providers`.\n\n"
 )
 (root / "AGENTS.md").write_text(header + body, encoding="utf-8")
+# The plugin bundle needs its own copy of SKILL.md. Copy it rather than
+# maintaining a second file that silently drifts from the first.
+plugin_skill = root / "skills" / "llvideo" / "SKILL.md"
+plugin_skill.parent.mkdir(parents=True, exist_ok=True)
+plugin_skill.write_text(skill, encoding="utf-8")
+
 print(f"AGENTS.md regenerated from SKILL.md ({len(body)} chars)")
+print(f"skills/llvideo/SKILL.md refreshed from SKILL.md")

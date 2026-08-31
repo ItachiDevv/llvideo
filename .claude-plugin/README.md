@@ -13,6 +13,6 @@ Requires `ffmpeg` on PATH and one of `GEMINI_API_KEY` or `OPENROUTER_API_KEY`.
 Install the plugin itself by adding this directory as a local marketplace:
 
 ```
-/plugin marketplace add C:\Users\newma\Desktop\llvideo
+/plugin marketplace add /path/to/llvideo
 /plugin install llvideo@llvideo-local
 ```

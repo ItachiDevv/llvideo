@@ -1,5 +1,8 @@
 # llvideo
 
+[![tests](https://github.com/ItachiDevv/llvideo/actions/workflows/test.yml/badge.svg)](https://github.com/ItachiDevv/llvideo/actions/workflows/test.yml)
+[![license](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+
 **Give any coding agent real video understanding.**
 
 LLM coding harnesses read images. None of them read video. The usual workaround —
@@ -64,7 +67,7 @@ Installs the CLI and deploys the agent wrappers to `~/.claude/skills/llvideo/` a
 
 OpenRouter is half the price but requires **$1.00 of purchased credit** before it will
 accept any video request, including on `:free` models. Keys are read from the
-environment, then from `~/.itachi-api-keys`.
+environment, or from a `KEY=value` file at `~/.itachi-api-keys`.
 
 Optional: `pip install Pillow faster-whisper` for exact sheet dimensions and local
 word-level transcription.

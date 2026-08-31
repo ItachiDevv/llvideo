@@ -1109,5 +1109,98 @@ class TestIndexCache(unittest.TestCase):
         self.assertIsNone(self._cache().get("k"))
 
 
+class TestKeyResolution(unittest.TestCase):
+    """A fresh clone with no keys must say so, not report a false green."""
+
+    def test_env_var_wins(self):
+        from llvideo.providers.base import read_key
+        os.environ["LLVIDEO_TEST_KEY"] = "from-env"
+        try:
+            self.assertEqual(read_key("LLVIDEO_TEST_KEY"), "from-env")
+        finally:
+            del os.environ["LLVIDEO_TEST_KEY"]
+
+    def test_missing_key_returns_none(self):
+        from llvideo.providers.base import read_key
+        self.assertIsNone(read_key("LLVIDEO_DEFINITELY_NOT_SET_ANYWHERE"))
+
+    def test_key_file_path_is_resolved_at_call_time(self):
+        """A module-level Path.home() is captured at import and ignores a later
+        HOME change, so a no-key environment still read the developer's real key
+        file and reported providers as available. Resolve it per call."""
+        import llvideo.providers.base as base
+        real = Path.home()
+        tmp = Path(tempfile.mkdtemp(prefix="llvideo_home_"))
+        try:
+            os.environ["HOME"] = str(tmp)
+            os.environ["USERPROFILE"] = str(tmp)
+            self.assertNotEqual(base._keyfile(), real / base.KEYFILE_NAME)
+        finally:
+            os.environ["HOME"] = str(real)
+            os.environ["USERPROFILE"] = str(real)
+            shutil.rmtree(tmp, ignore_errors=True)
+
+
+class TestPublicRepoHygiene(unittest.TestCase):
+    """Things a stranger cloning this repo would trip over."""
+
+    ROOT = Path(__file__).resolve().parent.parent
+
+    def _tracked(self):
+        out = subprocess.run(["git", "ls-files"], cwd=self.ROOT,
+                             capture_output=True, text=True, timeout=60)
+        return [self.ROOT / f for f in out.stdout.splitlines() if f.strip()]
+
+    def test_no_api_keys_committed(self):
+        import re
+        pat = re.compile(r"AIza[A-Za-z0-9_-]{30,}|sk-or-v1-[a-f0-9]{40,}"
+                         r"|xai-[A-Za-z0-9]{40,}|gsk_[A-Za-z0-9]{40,}")
+        for f in self._tracked():
+            if not f.is_file():
+                continue
+            try:
+                text = f.read_text(encoding="utf-8", errors="ignore")
+            except OSError:
+                continue
+            self.assertIsNone(pat.search(text), f"possible API key in {f.name}")
+
+    def test_no_hardcoded_personal_paths_in_docs(self):
+        docs = ["README.md", "SKILL.md", "AGENTS.md", "commands/llvideo.md",
+                ".claude-plugin/README.md"]
+        for name in docs:
+            f = self.ROOT / name
+            if not f.exists():
+                continue
+            text = f.read_text(encoding="utf-8", errors="ignore")
+            self.assertNotIn("Users\newma", text, f"personal path in {name}")
+
+    def test_plugin_manifest_is_valid(self):
+        m = json.loads((self.ROOT / ".claude-plugin" / "plugin.json")
+                       .read_text(encoding="utf-8"))
+        for key in ("name", "version", "description"):
+            self.assertIn(key, m)
+        self.assertEqual(m["name"], "llvideo")
+
+    def test_skill_frontmatter_is_wellformed(self):
+        text = (self.ROOT / "SKILL.md").read_text(encoding="utf-8")
+        self.assertTrue(text.startswith("---"), "SKILL.md needs YAML frontmatter")
+        head = text.split("---", 2)[1]
+        self.assertIn("name:", head)
+        self.assertIn("description:", head)
+
+    def test_generated_wrappers_match_their_source(self):
+        """AGENTS.md and the plugin SKILL.md are generated. If they drift, the
+        Codex wrapper silently documents an older contract — which happened."""
+        skill = (self.ROOT / "SKILL.md").read_text(encoding="utf-8")
+        plugin = self.ROOT / "skills" / "llvideo" / "SKILL.md"
+        if plugin.exists():
+            self.assertEqual(plugin.read_text(encoding="utf-8"), skill,
+                             "run scripts/make_agents.py")
+        agents = (self.ROOT / "AGENTS.md").read_text(encoding="utf-8")
+        for cmd in ("timeline", "craft", "audit", "spec", "gen", "fix"):
+            self.assertIn(f"llvideo {cmd}", agents,
+                          f"AGENTS.md is missing {cmd}; run scripts/make_agents.py")
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

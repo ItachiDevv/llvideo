@@ -1,0 +1,45 @@
+name: tests
+
+on:
+  push:
+    branches: [master, main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+        python: ["3.10", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+
+      # The whole suite is offline and free, but it builds real video fixtures
+      # with ffmpeg, so ffmpeg has to be present.
+      - name: Install ffmpeg (Linux)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y ffmpeg
+
+      - name: Install ffmpeg (Windows)
+        if: runner.os == 'Windows'
+        run: choco install ffmpeg -y --no-progress
+
+      - name: Install
+        run: pip install -e .
+
+      - name: CLI loads
+        run: llvideo --version
+
+      # No API key is set here, so this must still exit cleanly and say what is
+      # missing rather than crashing.
+      - name: Reports missing providers cleanly
+        run: llvideo providers
+
+      - name: Tests
+        run: python tests/test_llvideo.py

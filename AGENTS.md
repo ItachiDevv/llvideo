@@ -26,7 +26,9 @@ Needs `ffmpeg` on PATH and one API key. `GEMINI_API_KEY` handles everything.
 URL-and-small-clip only — and OpenRouter requires **$1.00 of purchased credit** before
 it will accept any video request, including on `:free` models.
 
-Keys are read from the environment, then from `~/.itachi-api-keys`.
+Keys are read from the environment first. As a fallback it also reads a
+`KEY=value` file at `~/.itachi-api-keys`, which is just a convenience for
+keeping keys out of your shell profile — environment variables are enough.
 
 ---
 
